@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+# This is a placeholder for the Phase 3 Code Execution Sandbox.
+# In production, this container will run with --network=none, 
+# strict resource limits, and a non-root user.
+
+RUN useradd -m -u 1000 sandbox_user
+WORKDIR /workspace
+
+# Install common data science/utility packages that agents might need
+RUN pip install --no-cache-dir pandas numpy requests matplotlib
+
+USER sandbox_user
+CMD ["python"]

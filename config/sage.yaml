@@ -1,0 +1,10 @@
+# SAGE Configuration (config/sage.yaml)
+
+ENVIRONMENT: "dev"
+LOG_LEVEL: "INFO"
+AIRGAP_MODE: true
+WORKSPACE_DIR: "/workspace"
+
+JWT_ALGORITHM: "HS256"
+JWT_EXPIRY_MINUTES: 60
+MODEL_REGISTRY_PATH: "/app/config/model_registry.yaml"

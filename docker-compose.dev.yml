@@ -1,0 +1,13 @@
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+    command: uvicorn sage.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Note: The SAGE CLI (sage-cli) is intended to be run directly on the host machine
+# rather than inside a Docker container, allowing it to easily interact with
+# the user's local filesystem and terminal environment.
+# To use it locally:
+# 1. cd cli
+# 2. pip install -e .
+# 3. sage --help

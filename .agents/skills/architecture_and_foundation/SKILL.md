@@ -57,11 +57,11 @@ Many SIH submissions treat RAG as "embed documents → vector search → done." 
 ```
 ┌─────────────────────────── ORGANIZATION BOUNDARY ───────────────────────────┐
 │                                                                              │
-│  ┌──────────┐    ┌──────────────────────────────────────────────────────┐    │
-│  │  Web UI   │◄──►│                  SAGE BACKEND                       │    │
-│  │ (Next.js) │    │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  │    │
-│  └──────────┘    │  │   API      │  │   Agent    │  │   Document   │  │    │
-│                   │  │   Gateway  │  │   Engine   │  │   Generator  │  │    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────────────────────────────────┐    │
+│  │  Web UI  │ │ CLI Tool │◄│                 SAGE BACKEND                 │    │
+│  │(Next.js) │ │ (Typer)  │►│ ┌────────────┐  ┌────────────┐  ┌──────────┐ │    │
+│  └──────────┘ └──────────┘ │ │   API      │  │   Agent    │  │ Document │ │    │
+│                            │ │   Gateway  │  │   Engine   │  │ Generator│ │    │
 │                   │  └─────┬──────┘  └─────┬──────┘  └──────┬───────┘  │    │
 │                   │        │               │                │          │    │
 │                   │  ┌─────▼───────────────▼────────────────▼───────┐  │    │
@@ -107,6 +107,7 @@ The backend is a single Python (FastAPI) process with clearly separated modules.
 
 ```
 sage/
+├── cli/                    # CLI Frontend (Typer/Rich)
 ├── api/                    # FastAPI routes, WebSocket handlers
 ├── agent/                  # Agent orchestration engine
 │   ├── planner.py          # Task decomposition, planning
@@ -150,6 +151,7 @@ sage/
 ```mermaid
 graph TD
     UI[Web UI] --> API[API Gateway]
+    CLI[Terminal CLI] --> API
     API --> AUTH[Auth Module]
     API --> AGENT[Agent Engine]
     AGENT --> ROUTER[Model Router]

@@ -311,6 +311,190 @@ Both llama.cpp server and vLLM expose the same OpenAI-compatible `/v1/chat/compl
 
 ---
 
+## 11. Model Recommendations
+
+### Model Selection Matrix (SIH Demo — 16–24 GB VRAM)
+
+| Task | Model | Size (Q4) | VRAM | Why |
+|------|-------|-----------|------|-----|
+| **Reasoning / General** | Qwen3-8B-Instruct | ~5 GB | ~6 GB | Best overall quality for size; strong reasoning and tool-calling |
+| **Coding** | Qwen3-Coder-8B | ~5 GB | ~6 GB | Purpose-built for code; excellent agentic coding performance |
+| **Vision / OCR** | Qwen2.5-VL-7B-Instruct | ~5 GB | ~6 GB | Strong vision understanding; handles documents, diagrams, handwriting |
+| **Embedding** | nomic-embed-text (137M) | ~270 MB | <1 GB | Fast, local, good quality for RAG; served via sentence-transformers |
+
+**Total VRAM (worst case, all loaded simultaneously):** ~19 GB — fits on a 24 GB GPU.
+
+**On 12–16 GB VRAM:** Swap models between tasks. Keep the reasoning model hot-loaded. Vision and coding models loaded on-demand (~10 s swap time using pre-loaded GGUF files).
+
+### Alternative / Fallback Models
+
+| Task | Alternative | Trade-off |
+|------|-------------|-----------|
+| Reasoning | Phi-4-mini (3.8B) | Smaller but less capable; good for very constrained hardware |
+| Reasoning | Gemma-4-12B | Excellent quality but requires more VRAM |
+| Coding | DeepSeek-Coder-V2-Lite (16B) | Better benchmark scores but larger footprint |
+| Vision | Phi-4-Multimodal (5.6B) | Smaller, suitable for charts and documents |
+| Embedding | BGE-M3 | Higher quality (dense + sparse vectors) but heavier |
+
+---
+
+## 12. Adding Models Later
+
+One of SAGE's core principles is **models are data, not code**. Adding a new model is a YAML config change — no code changes required.
+
+### Step 1: Add to `model_registry.yaml`
+
+```yaml
+# config/model_registry.yaml
+models:
+  - id: gemma-4-12b
+    name: "Gemma 4 12B"
+    model_path: "/opt/sage/models/gemma-4-12b-Q4_K_M.gguf"
+    server_port: 8004
+    capabilities: ["reasoning", "analysis"]
+    priority: 2          # Lower = preferred when multiple models share a capability
+    min_vram_gb: 8
+    context_length: 32768
+
+  - id: deepseek-coder-v2
+    name: "DeepSeek Coder V2"
+    model_path: "/opt/sage/models/deepseek-coder-v2-16b-Q4_K_M.gguf"
+    server_port: 8005
+    capabilities: ["coding"]
+    priority: 1
+    min_vram_gb: 10
+    context_length: 65536
+```
+
+### Step 2: Download the GGUF File
+
+```bash
+# Run on an internet-connected machine, then transfer to the air-gapped server
+huggingface-cli download bartowski/gemma-4-12b-GGUF \
+  --include "*Q4_K_M*" \
+  --local-dir /opt/sage/models/
+```
+
+### Step 3: Restart SAGE
+
+The model registry auto-discovers new entries at startup. No code changes. The router automatically includes the new model in capability-based routing based on its declared `capabilities` and `priority`.
+
+### Extensibility Design Principles
+
+| Principle | Implementation |
+|-----------|---------------|
+| **Models are data** | YAML config change only — never a code change |
+| **Capabilities as tags** | `["reasoning", "coding"]` — router matches task needs to model tags |
+| **Priority ordering** | Multiple models with the same capability → highest-priority healthy model wins |
+| **Health-gated routing** | Models that fail the startup health check are excluded automatically |
+
+---
+
+## 13. Failure Handling & Fallback Mechanisms
+
+The agent engine and model router are designed to degrade gracefully rather than crash hard.
+
+### Failure Matrix
+
+| Failure | Detection | Fallback Strategy |
+|---------|-----------|-------------------|
+| **Model server unavailable** | Health check fails | Route to next model with same capability; if none → clear error to user |
+| **Model returns invalid output** | JSON parse error / no tool call extracted | Retry up to 3× with modified prompt; return partial result if still failing |
+| **Tool execution error** | Python exception caught | Log error, pass error description back to agent, let agent replan |
+| **Sandbox timeout** | 30 s hard kill | Kill container, return timeout error to agent |
+| **RAG returns no results** | Empty result set | Agent continues without RAG context; flags "no relevant documents found" in output |
+| **OCR extraction fails** | Empty or garbled text | Fall back to vision model for direct image interpretation |
+| **Document generation fails** | Template rendering error | Return error with details; agent can retry with corrected template data |
+| **Infinite agent loop** | Step counter exceeds `max_steps` | Force-terminate execution, return partial result + audit trace |
+| **VRAM exhaustion** | CUDA OOM error | Unload lowest-priority idle model; retry; if OOM persists → user-facing error |
+| **Database connection lost** | asyncpg `ConnectionError` | Retry with exponential backoff; buffer audit logs in memory until reconnected |
+
+### Circuit Breaker
+
+Repeated failures against a model server open a circuit breaker, preventing request floods into an already-unhealthy endpoint.
+
+```python
+class ModelCircuitBreaker:
+    failure_threshold: int = 5     # Open after 5 consecutive failures
+    recovery_timeout: int = 60     # Try again after 60 seconds (half-open state)
+
+    def call(self, model_id: str, request):
+        if self.is_open(model_id):
+            raise ModelUnavailableError(f"{model_id} circuit is open — skipping")
+        try:
+            result = self.model_client.call(request)
+            self.record_success(model_id)
+            return result
+        except Exception as e:
+            self.record_failure(model_id)
+            raise
+```
+
+The router catches `ModelUnavailableError` and falls through to the next healthy model with the same capability.
+
+---
+
+## 14. Performance Targets & Optimization
+
+### Latency Targets
+
+| Operation | Target | Acceptable Max |
+|-----------|--------|----------------|
+| First token — reasoning model | < 2 s | < 5 s |
+| First token — coding model | < 2 s | < 5 s |
+| First token — vision model | < 3 s | < 8 s |
+| OCR (single A4 page) | < 3 s | < 10 s |
+| RAG search | < 500 ms | < 2 s |
+| Document generation (.docx) | < 5 s | < 15 s |
+| Model routing decision | < 50 ms | < 200 ms |
+| Complete inspection workflow | < 60 s | < 120 s |
+
+### Optimization Strategies
+
+1. **Model pre-loading** — Keep the primary reasoning model in VRAM at all times. Pre-warm on SAGE startup.
+2. **Streaming responses** — Stream tokens from the model server as they're generated. Don't buffer the full response before sending to the client.
+3. **Embedding cache** — Cache frequently-queried chunk embeddings in Redis to avoid redundant re-computation.
+4. **Async I/O everywhere** — FastAPI's async + asyncio for all DB, network, and file operations. No blocking calls in the hot path.
+5. **Template caching** — Parse `.docx`/`.pptx` templates once at startup; cache the parsed template object.
+6. **Lazy tool imports** — Only import heavy tool dependencies (e.g., PaddleOCR, openpyxl) when the tool is first invoked.
+7. **KV cache reuse** — Configure llama.cpp's `--cache-reuse` (or vLLM's prefix caching) to retain the KV cache between requests with shared prefixes (system prompts, agent context).
+8. **DB connection pooling** — asyncpg pool, `pool_size=20`, for the PostgreSQL connection. Avoid per-request connection overhead.
+
+### VRAM Budget Planning
+
+```
+Model Loading Strategy (16 GB GPU — SIH Demo):
+  ┌──────────────────────────────────────┐
+  │  Always Hot: qwen3-8b (~6 GB)        │  ← reasoning + general tasks
+  ├──────────────────────────────────────┤
+  │  On-Demand: qwen3-coder-8b (~6 GB)   │  ← loaded when coding task detected
+  │  On-Demand: qwen2.5-vl-7b (~6 GB)   │  ← loaded when image/PDF input detected
+  │  (only one on-demand model at a time)│
+  ├──────────────────────────────────────┤
+  │  Always: nomic-embed-text (<1 GB)    │  ← embedding model
+  └──────────────────────────────────────┘
+  Peak usage: ~13 GB (reasoning + one on-demand + embedding)
+```
+
+---
+
+## 15. Key Design Decisions — Summary
+
+This table captures the major architectural choices made in this section and their rationale.
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **Model server (demo)** | llama.cpp server | Cross-platform, single binary, GGUF quants, no Docker |
+| **Model server (production)** | vLLM | Continuous batching, PagedAttention, multi-model native |
+| **Agent framework** | Custom ~500-line ReAct loop | Full control, no LangChain/LangGraph lock-in, zero telemetry risk |
+| **Model router** | Deterministic classifier | Avoids circular dependency; 50ms vs 2–5s for LLM routing |
+| **Coding agent** | Native profile (not CLI wrapper) | Unified architecture, full audit trail, shared model router |
+| **Model extensibility** | YAML registry | Models are data, not code — no deployment required to add a model |
+| **Failure strategy** | Circuit breaker + graceful fallback | Prevents cascade failures; agent recovers rather than hard-crashes |
+| **VRAM strategy (SIH)** | Hot primary + on-demand secondary | Fits 16–24 GB GPUs; ~10 s swap is acceptable at demo scale |
+
+---
+
 > **Cross-References:**
 > - Architecture & Foundation → `01_Architecture_And_Foundation.md`
 > - Tool/Plugin & RAG details → `03_Tools_RAG_And_Multimodal.md`

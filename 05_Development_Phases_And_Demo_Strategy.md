@@ -285,6 +285,7 @@ SAGE/
 - [ ] Basic model client abstraction
 - [ ] Simple chat endpoint (no agent loop — direct LLM call)
 - [ ] Next.js frontend scaffold with basic chat UI
+- [ ] Python CLI scaffold (Typer + Rich)
 - [ ] WebSocket streaming (token-by-token)
 - [ ] PostgreSQL setup with initial schema
 - [ ] Basic JWT auth

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project specific
+backend/alembic.ini.bak
+models/
+docs/_build/
+*.sqlite3
+sage.db
+
+# Logs
+logs/
+*.log
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node (for Next.js frontend later)
+node_modules/
+.next/
+out/
+build/

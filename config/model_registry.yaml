@@ -1,0 +1,27 @@
+models:
+  - id: qwen3-8b
+    name: "Qwen3 8B Instruct"
+    model_path: "/models/qwen3-8b-Q4_K_M.gguf"
+    server_port: 8001
+    capabilities: ["reasoning", "general"]
+    priority: 1
+    min_vram_gb: 6
+    context_length: 8192
+
+  - id: qwen3-coder-8b
+    name: "Qwen3 Coder 8B"
+    model_path: "/models/qwen3-coder-8b-Q4_K_M.gguf"
+    server_port: 8002
+    capabilities: ["coding"]
+    priority: 1
+    min_vram_gb: 6
+    context_length: 8192
+
+  - id: qwen2.5-vl-7b
+    name: "Qwen2.5 VL 7B"
+    model_path: "/models/qwen2.5-vl-7b-Q4_K_M.gguf"
+    server_port: 8003
+    capabilities: ["vision"]
+    priority: 1
+    min_vram_gb: 6
+    context_length: 8192

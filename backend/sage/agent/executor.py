@@ -1,0 +1,241 @@
+import time
+import json
+from typing import Callable, Optional, Awaitable, Any
+from sage.agent.state import AgentState, ExecutionTrace, TraceEvent
+from sage.agent.schemas import AgentResponse, Plan
+from sage.agent.profiles.manager import ProfileManager
+from sage.agent.router import ModelRouter
+from sage.models.client import OpenAICompatibleClient
+from sage.tools.registry import ToolRegistry
+from sage.tools.base import ToolPermission
+from sage.agent.planner import Planner
+from sage.core.utils import generate_id
+
+StreamCallback = Callable[[TraceEvent], Awaitable[None]]
+
+class ReActExecutor:
+    def __init__(
+        self,
+        router: ModelRouter,
+        tool_registry: ToolRegistry,
+        profile_manager: ProfileManager,
+        max_steps: int = 15,
+        max_retries_per_step: int = 3
+    ):
+        self.router = router
+        self.tool_registry = tool_registry
+        self.profile_manager = profile_manager
+        self.planner = Planner()
+        self.max_steps = max_steps
+        self.max_retries_per_step = max_retries_per_step
+
+    async def run(
+        self,
+        prompt: str,
+        profile_name: str = "general",
+        task_id: Optional[str] = None,
+        file_attachments: Optional[list] = None,
+        stream_callback: Optional[StreamCallback] = None,
+        require_approval_for_high_risk: bool = True
+    ) -> AgentResponse:
+        task_id = task_id or generate_id()
+        profile = self.profile_manager.get_profile(profile_name)
+
+        # 1. Route Model (Deterministic)
+        model_config, routing_reason = self.router.route(
+            prompt=prompt,
+            profile_name=profile.name,
+            file_attachments=file_attachments
+        )
+
+        client = OpenAICompatibleClient(base_url=f"http://localhost:{model_config.server_port}")
+
+        # Initialize persistent trace
+        trace = ExecutionTrace(
+            task_id=task_id,
+            prompt=prompt,
+            profile_name=profile.name,
+            selected_model=model_config.id,
+            routing_reason=routing_reason
+        )
+
+        async def emit(event: TraceEvent):
+            trace.add_event(event)
+            if stream_callback:
+                await stream_callback(event)
+
+        # 2. State = PLANNING
+        plan_event = TraceEvent(
+            task_id=task_id,
+            agent_state=AgentState.PLANNING,
+            profile=profile.name,
+            selected_model=model_config.id,
+            routing_reason=routing_reason,
+            reflection=f"Routing decision: Selected {model_config.id} because ({routing_reason})"
+        )
+        await emit(plan_event)
+
+        plan: Plan = await self.planner.create_plan(prompt, profile, client, model_config.id)
+        
+        final_output = ""
+        current_step_idx = 0
+        step_retry_count = 0
+
+        # Main ReAct Execution Loop
+        while current_step_idx < len(plan.steps) and len(trace.events) < self.max_steps:
+            step = plan.steps[current_step_idx]
+
+            # 3. State = ACTING
+            tool_name = step.tool_name
+            tool_args = step.tool_args or {}
+
+            # Permission Check & Approval State
+            if tool_name:
+                tool_inst = self.tool_registry.get_tool(tool_name)
+                if tool_inst and tool_inst.permission == ToolPermission.HIGH_RISK and require_approval_for_high_risk:
+                    # Transition to WAITING_FOR_APPROVAL
+                    approval_event = TraceEvent(
+                        task_id=task_id,
+                        step_id=step.step_id,
+                        agent_state=AgentState.WAITING_FOR_APPROVAL,
+                        profile=profile.name,
+                        selected_model=model_config.id,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        reflection=f"High-risk operation '{tool_name}' requires approval before execution."
+                    )
+                    await emit(approval_event)
+                    # For Phase 1 backend test harness: auto-approve after state transition record
+                    
+            act_event = TraceEvent(
+                task_id=task_id,
+                step_id=step.step_id,
+                agent_state=AgentState.ACTING,
+                profile=profile.name,
+                selected_model=model_config.id,
+                tool_name=tool_name,
+                tool_args=tool_args
+            )
+            await emit(act_event)
+
+            # 4. State = OBSERVING
+            start_time = time.time()
+            if tool_name:
+                tool_res = await self.tool_registry.execute_tool(
+                    name=tool_name,
+                    kwargs=tool_args,
+                    allowed_tools=profile.allowed_tools
+                )
+                duration_ms = (time.time() - start_time) * 1000.0
+
+                obs_event = TraceEvent(
+                    task_id=task_id,
+                    step_id=step.step_id,
+                    agent_state=AgentState.OBSERVING,
+                    profile=profile.name,
+                    selected_model=model_config.id,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    tool_result=tool_res.output if tool_res.success else None,
+                    error=tool_res.error if not tool_res.success else None,
+                    duration_ms=duration_ms,
+                    retry_count=step_retry_count
+                )
+                await emit(obs_event)
+
+                # 5. State = REFLECTING
+                if tool_res.success:
+                    final_output = tool_res.output
+                    reflection_msg = f"Step {step.step_id} succeeded: {tool_res.output[:100]}"
+                    reflect_event = TraceEvent(
+                        task_id=task_id,
+                        step_id=step.step_id,
+                        agent_state=AgentState.REFLECTING,
+                        profile=profile.name,
+                        selected_model=model_config.id,
+                        reflection=reflection_msg
+                    )
+                    await emit(reflect_event)
+                    current_step_idx += 1
+                    step_retry_count = 0
+                else:
+                    # Retry Logic
+                    step_retry_count += 1
+                    reflection_msg = f"Step {step.step_id} failed: {tool_res.error}. Retry count: {step_retry_count}/{self.max_retries_per_step}"
+                    reflect_event = TraceEvent(
+                        task_id=task_id,
+                        step_id=step.step_id,
+                        agent_state=AgentState.REFLECTING,
+                        profile=profile.name,
+                        selected_model=model_config.id,
+                        error=tool_res.error,
+                        reflection=reflection_msg,
+                        retry_count=step_retry_count
+                    )
+                    await emit(reflect_event)
+
+                    if step_retry_count >= self.max_retries_per_step:
+                        # Max retries reached, fail execution
+                        fail_event = TraceEvent(
+                            task_id=task_id,
+                            step_id=step.step_id,
+                            agent_state=AgentState.FAILED,
+                            profile=profile.name,
+                            selected_model=model_config.id,
+                            error=f"Exceeded max retries ({self.max_retries_per_step}) for step {step.step_id}"
+                        )
+                        await emit(fail_event)
+                        return AgentResponse(
+                            task_id=task_id,
+                            status=AgentState.FAILED,
+                            output="",
+                            trace=trace
+                        )
+            else:
+                # LLM Direct Response step
+                messages = [
+                    {"role": "system", "content": f"You are a helpful assistant operating under profile '{profile.name}'."},
+                    {"role": "user", "content": prompt}
+                ]
+                llm_resp = await client.chat(model=model_config.id, messages=messages)
+                choices = llm_resp.get("choices", [{}])
+                final_output = choices[0].get("message", {}).get("content", "No output generated.")
+                
+                duration_ms = (time.time() - start_time) * 1000.0
+                obs_event = TraceEvent(
+                    task_id=task_id,
+                    step_id=step.step_id,
+                    agent_state=AgentState.OBSERVING,
+                    profile=profile.name,
+                    selected_model=model_config.id,
+                    tool_result=final_output,
+                    duration_ms=duration_ms
+                )
+                await emit(obs_event)
+                current_step_idx += 1
+
+        # 6. State = DELIVERING
+        deliver_event = TraceEvent(
+            task_id=task_id,
+            agent_state=AgentState.DELIVERING,
+            profile=profile.name,
+            selected_model=model_config.id,
+            reflection=f"Final output generated successfully."
+        )
+        await emit(deliver_event)
+
+        # 7. State = COMPLETED
+        completed_event = TraceEvent(
+            task_id=task_id,
+            agent_state=AgentState.COMPLETED,
+            profile=profile.name,
+            selected_model=model_config.id
+        )
+        await emit(completed_event)
+
+        return AgentResponse(
+            task_id=task_id,
+            status=AgentState.COMPLETED,
+            output=final_output,
+            trace=trace
+        )
