@@ -1,0 +1,2216 @@
+# SAGE — Sovereign Autonomous Generative Engine
+## Complete Technical Architecture Plan
+
+**SIH Problem Statement:** SIH26117 — Sovereign On-Premise Agentic AI Workbench  
+**Sponsoring Organization:** Mangalore Refinery and Petrochemicals Limited (MRPL)  
+**Date:** 2026-08-26
+
+---
+
+## Table of Contents
+
+1. [Executive Summary](#1-executive-summary)
+2. [Critical Corrections to Proposed Assumptions](#2-critical-corrections-to-proposed-assumptions)
+3. [System Architecture](#3-system-architecture)
+4. [Component Architecture](#4-component-architecture)
+5. [Recommended Technology Stack](#5-recommended-technology-stack)
+6. [Model-Serving Architecture](#6-model-serving-architecture)
+7. [Model-Routing Architecture](#7-model-routing-architecture)
+8. [Agent Orchestration Architecture](#8-agent-orchestration-architecture)
+9. [Coding Agent Architecture](#9-coding-agent-architecture)
+10. [Model Server Selection: vLLM vs Alternatives](#10-model-server-selection-vllm-vs-alternatives)
+11. [Tool/Plugin Architecture](#11-toolplugin-architecture)
+12. [Sandbox Architecture & Security](#12-sandbox-architecture--security)
+13. [Local RAG / Knowledge-Base Architecture](#13-local-rag--knowledge-base-architecture)
+14. [OCR & Multimodal Pipeline](#14-ocr--multimodal-pipeline)
+15. [Document Generation Pipeline](#15-document-generation-pipeline)
+16. [Backend Architecture](#16-backend-architecture)
+17. [Frontend / UI Architecture](#17-frontend--ui-architecture)
+18. [Authentication & Authorization](#18-authentication--authorization)
+19. [Audit Logging](#19-audit-logging)
+20. [Network Isolation / Air-Gapped Architecture](#20-network-isolation--air-gapped-architecture)
+21. [Security Threat Model](#21-security-threat-model)
+22. [Data Flow](#22-data-flow)
+23. [API Design](#23-api-design)
+24. [Folder / Repository Structure](#24-folder--repository-structure)
+25. [Development Phases](#25-development-phases)
+26. [MVP vs Advanced Features](#26-mvp-vs-advanced-features)
+27. [SIH Demo Strategy](#27-sih-demo-strategy)
+28. [Hardware Requirements](#28-hardware-requirements)
+29. [Model Recommendations](#29-model-recommendations)
+30. [How Models Can Be Added Later](#30-how-models-can-be-added-later)
+31. [Testing Strategy](#31-testing-strategy)
+32. [Failure Handling & Fallback Mechanisms](#32-failure-handling--fallback-mechanisms)
+33. [Performance Considerations](#33-performance-considerations)
+34. [Deployment Strategy](#34-deployment-strategy)
+35. [Sovereignty Proof](#35-sovereignty-proof)
+36. [Architectural Mistakes to Avoid](#36-architectural-mistakes-to-avoid)
+37. [Architecture Diagrams](#37-architecture-diagrams)
+38. [Risks & Mitigations](#38-risks--mitigations)
+
+---
+
+## 1. Executive Summary
+
+SAGE is an **air-gap-capable, on-premise agentic AI workbench** designed for organizations handling classified or confidential industrial data — refineries, PSUs, defence-linked manufacturing, and government offices. It is not a chatbot with a local model. It is a **multi-model orchestration platform** with genuine agentic capabilities: planning, tool-calling, multi-step execution, error recovery, and verified deliverable generation.
+
+### Core Design Principles
+
+| # | Principle | Implication |
+|---|-----------|-------------|
+| 1 | **Zero Egress** | No byte leaves the org boundary. Provably. |
+| 2 | **Model Pluralism** | No single-model dependency. Router selects the best model per task. |
+| 3 | **Agent, Not Chatbot** | ReAct-style planning loops with tool-calling, not turn-by-turn Q&A. |
+| 4 | **Deliverable-Oriented** | Outputs are Word docs, PPTX, XLSX, code files — not just chat text. |
+| 5 | **Extensible** | New models, new tools, new document types can be added without redesign. |
+| 6 | **Auditable** | Every inference, tool call, file operation, and network packet is logged. |
+
+---
+
+## 2. Critical Corrections to Proposed Assumptions
+
+> [!CAUTION]
+> The following corrections challenge assumptions in the original proposal. Read before proceeding.
+
+### 2.1 Build a Native Coding Agent — Don't Embed External CLI Tools
+
+**Principle:** The coding agent must be a **native agent profile** within SAGE's own orchestration layer — not a wrapper around an external CLI tool. The coding agent is just another agent profile with specialized tools (file I/O, subprocess, linter). This keeps the architecture unified, the agentic loop fully under your control, and audit logging comprehensive.
+
+### 2.2 Plan for Concurrent Multi-Model Serving
+
+SAGE needs to serve **multiple models concurrently** (e.g., a reasoning model + a vision model for the inspection workflow). vLLM supports this natively through its multi-model serving capability. For the SIH demo on constrained hardware, use llama.cpp server instances (one per model, loaded on-demand) as a lightweight alternative.
+
+### 2.3 "Air-Gapped" ≠ "Never Connects to Internet"
+
+The system must be **capable** of running air-gapped. But it should also work on a standard internal network. The architecture must support both modes — an `AIRGAP_MODE=true` flag that blocks all egress and enables offline fallbacks, not an architecture that *only* works offline.
+
+### 2.4 RAG Without Proper Chunking/Indexing Is Useless
+
+Many SIH submissions treat RAG as "embed documents → vector search → done." Industrial documents (SOPs, P&IDs, inspection reports) are **structurally complex** — tables, cross-references, numbered sections. Naive chunking destroys this structure. SAGE must invest heavily in **document parsing and structured chunking** before embedding.
+
+---
+
+## 3. System Architecture
+
+### High-Level Architecture
+
+```
+┌─────────────────────────── ORGANIZATION BOUNDARY ───────────────────────────┐
+│                                                                              │
+│  ┌──────────┐    ┌──────────────────────────────────────────────────────┐    │
+│  │  Web UI   │◄──►│                  SAGE BACKEND                       │    │
+│  │ (Next.js) │    │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  │    │
+│  └──────────┘    │  │   API      │  │   Agent    │  │   Document   │  │    │
+│                   │  │   Gateway  │  │   Engine   │  │   Generator  │  │    │
+│                   │  └─────┬──────┘  └─────┬──────┘  └──────┬───────┘  │    │
+│                   │        │               │                │          │    │
+│                   │  ┌─────▼───────────────▼────────────────▼───────┐  │    │
+│                   │  │              MODEL ROUTER                    │  │    │
+│                   │  └─────┬──────────────┬──────────────┬──────────┘  │    │
+│                   │        │              │              │             │    │
+│                   │  ┌─────▼──────┐ ┌────▼──────┐ ┌────▼──────────┐  │    │
+│                   │  │  vLLM /    │ │  vLLM /   │ │   vLLM /      │  │    │
+│                   │  │  llama.cpp │ │  llama.cpp│ │   llama.cpp   │  │    │
+│                   │  │  (Reason)  │ │  (Code)   │ │   (Vision)    │  │    │
+│                   │  └────────────┘ └───────────┘ └───────────────┘  │    │
+│                   │                                                   │    │
+│                   │  ┌────────────┐  ┌────────────┐  ┌────────────┐  │    │
+│                   │  │  Tool      │  │  RAG       │  │  Sandbox   │  │    │
+│                   │  │  Registry  │  │  Engine    │  │  (Docker)  │  │    │
+│                   │  └────────────┘  └────────────┘  └────────────┘  │    │
+│                   └──────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │  INFRASTRUCTURE:  PostgreSQL + pgvector  │  Redis  │  Audit Logger  │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │  NETWORK MONITOR:  iptables/nftables firewall  │  tcpdump logger    │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Architectural Style
+
+**Modular Monolith** (not microservices).
+
+**Why:** A small team building for SIH cannot maintain 15 Docker containers. A modular monolith gives you:
+- Single deployment unit → simpler ops.
+- Clear internal module boundaries → can be split later.
+- Shared process → no inter-service serialization overhead.
+
+The backend is a single Python (FastAPI) process with clearly separated modules. Heavy inference is delegated to external model server processes (vLLM or llama.cpp server).
+
+---
+
+## 4. Component Architecture
+
+```
+sage/
+├── api/                    # FastAPI routes, WebSocket handlers
+├── agent/                  # Agent orchestration engine
+│   ├── planner.py          # Task decomposition, planning
+│   ├── executor.py         # Step execution loop (ReAct)
+│   ├── router.py           # Model selection logic
+│   └── profiles/           # Agent profiles (coder, analyst, etc.)
+├── models/                 # Model registry, model server client abstraction
+├── tools/                  # Tool implementations (file I/O, code exec, etc.)
+│   ├── registry.py         # Tool discovery and registration
+│   ├── file_ops.py
+│   ├── code_executor.py
+│   ├── spreadsheet.py
+│   ├── rag_search.py
+│   ├── ocr.py
+│   └── doc_generator.py
+├── rag/                    # RAG pipeline
+│   ├── ingestion.py        # Document parsing, chunking, embedding
+│   ├── retriever.py        # Hybrid search (vector + BM25)
+│   └── embedder.py         # Local embedding model client
+├── docgen/                 # Document generation
+│   ├── word.py
+│   ├── pptx.py
+│   ├── xlsx.py
+│   └── templates/          # .docx/.pptx template files
+├── multimodal/             # OCR, vision processing
+│   ├── ocr_engine.py
+│   ├── vision_processor.py
+│   └── image_utils.py
+├── sandbox/                # Code execution sandbox
+│   ├── docker_sandbox.py
+│   └── security.py
+├── auth/                   # Authentication & authorization
+├── audit/                  # Audit logging, network monitoring
+├── config/                 # Configuration management
+├── db/                     # Database models, migrations
+└── core/                   # Shared utilities, schemas, exceptions
+```
+
+### Component Dependency Graph
+
+```mermaid
+graph TD
+    UI[Web UI] --> API[API Gateway]
+    API --> AUTH[Auth Module]
+    API --> AGENT[Agent Engine]
+    AGENT --> ROUTER[Model Router]
+    AGENT --> TOOLS[Tool Registry]
+    ROUTER --> MSRV[Model Servers - vLLM / llama.cpp]
+    TOOLS --> FILE[File Ops]
+    TOOLS --> CODE[Code Executor]
+    TOOLS --> RAG[RAG Search]
+    TOOLS --> OCR[OCR Engine]
+    TOOLS --> DOCGEN[Doc Generator]
+    CODE --> SANDBOX[Docker Sandbox]
+    RAG --> EMBED[Embedding Model]
+    RAG --> PGVEC[pgvector]
+    OCR --> VISION[Vision Model via Model Server]
+    AGENT --> AUDIT[Audit Logger]
+    API --> AUDIT
+```
+
+---
+
+## 5. Recommended Technology Stack
+
+| Layer | Technology | Why | Alternatives |
+|-------|-----------|-----|-------------|
+| **Language** | Python 3.12+ | Dominant in AI/ML ecosystem; best library support | Go (for performance-critical components only) |
+| **Web Framework** | FastAPI | Async, fast, OpenAPI docs built-in, WebSocket support | Flask (simpler but synchronous), Django (heavier) |
+| **Agent Framework** | Custom (lightweight) | Full control over agentic loop; no framework lock-in | LangGraph (heavier but more features), smolagents (promising) |
+| **Model Server** | vLLM (production) / llama.cpp server (demo) | vLLM: enterprise-grade, continuous batching, PagedAttention; llama.cpp: lightweight, cross-platform, GGUF quants | SGLang (alternative to vLLM) |
+| **Vector DB** | PostgreSQL + pgvector | One DB for everything; ACID; no new infra | ChromaDB (simpler), Milvus (overkill for MVP) |
+| **Relational DB** | PostgreSQL 16+ | Battle-tested, pgvector extension, JSON support | SQLite (dev only) |
+| **Cache/Queue** | Redis | Session state, task queue, pub/sub for streaming | In-process queue (simpler for MVP) |
+| **Frontend** | Next.js 14+ (App Router) | SSR, file-based routing, excellent DX, React ecosystem | Vite + React (lighter), SvelteKit |
+| **Document Gen** | python-docx-template, python-pptx, openpyxl | Mature, template-driven, no external deps | LibreOffice CLI (heavier) |
+| **OCR** | Tesseract + PaddleOCR | Tesseract: battle-tested; PaddleOCR: better for complex layouts | EasyOCR, Surya |
+| **Embedding** | BGE-M3 (via sentence-transformers) | Multi-vector, local, high quality | Qwen3-Embedding, nomic-embed-text |
+| **Sandbox** | Docker (with seccomp + resource limits) | Ubiquitous, well-understood isolation | Bubblewrap (lighter), Firecracker (stronger) |
+| **Auth** | JWT + bcrypt (custom) | Simple, no external deps for air-gap | Keycloak (enterprise, heavier) |
+| **Monitoring** | Structured JSON logs + Prometheus metrics | Local, no cloud dependency | Grafana + Loki (nicer UI) |
+| **Containerization** | Docker Compose | Single-command deployment | Podman (rootless alternative) |
+
+### Why Custom Agent Framework Over LangGraph?
+
+> [!IMPORTANT]
+> This is a deliberate design choice. Here's the trade-off analysis.
+
+**LangGraph Pros:** Battle-tested, excellent state management, built-in retry/cycle handling, LangSmith observability.
+
+**LangGraph Cons for SAGE:**
+1. **Heavy dependency** — Pulls in LangChain ecosystem (hundreds of transitive deps). In an air-gapped environment, dependency management is a security concern.
+2. **Abstraction mismatch** — LangGraph's graph abstraction adds complexity when your agent loop is fundamentally: `plan → select tool → execute → observe → repeat`.
+3. **Model coupling** — LangChain's LLM abstractions add latency and make it harder to pass raw tool-calling schemas directly to the model server's OpenAI-compatible API.
+4. **Air-gap risk** — LangChain frequently phones home for telemetry/analytics unless explicitly disabled.
+
+**SAGE's approach:** A ~500-line custom ReAct loop with:
+- Explicit state machine (plan → act → observe → reflect → complete/retry)
+- Direct OpenAI-compatible HTTP API calls to vLLM / llama.cpp server (no middleware)
+- Tool registry with schema introspection
+- Structured logging at every step
+
+This is simpler, faster, fully auditable, and has zero external dependencies.
+
+---
+
+## 6. Model-Serving Architecture
+
+### Architecture: Multi-Instance Model Servers
+
+```
+┌─────────────────────────────────────────┐
+│            Model Registry               │
+│  ┌─────────────────────────────────┐    │
+│  │  model_id: qwen3-8b            │    │
+│  │  server:   localhost:8001       │    │
+│  │  type:     reasoning           │    │
+│  │  vram:     ~6GB (Q4_K_M)       │    │
+│  ├─────────────────────────────────┤    │
+│  │  model_id: qwen3-coder-8b      │    │
+│  │  server:   localhost:8002       │    │
+│  │  type:     coding              │    │
+│  │  vram:     ~6GB (Q4_K_M)       │    │
+│  ├─────────────────────────────────┤    │
+│  │  model_id: qwen2.5-vl-7b       │    │
+│  │  server:   localhost:8003       │    │
+│  │  type:     vision              │    │
+│  │  vram:     ~5GB (Q4_K_M)       │    │
+│  └─────────────────────────────────┘    │
+└─────────────────────────────────────────┘
+```
+
+### Multi-Model Serving Strategy
+
+For workflows that need both reasoning + vision (inspection workflow), we need both models ready simultaneously.
+
+**Strategy:**
+- **SIH Demo (single GPU, 16-24GB VRAM):** Run llama.cpp server instances. Keep the primary reasoning model hot-loaded; start vision/coding model servers on-demand (~5s startup with pre-loaded GGUF files).
+- **Production (multi-GPU):** Use vLLM with multi-model serving, each model pinned to a GPU. Zero swap latency. Continuous batching for concurrent users.
+
+### Model Lifecycle
+
+```
+1. SAGE boots → reads model_registry.yaml
+2. For each model entry:
+   a. Check if GGUF/safetensors model file exists at configured path
+   b. If missing → error in air-gap mode; download in online mode
+   c. Start model server process (llama-server or vLLM)
+   d. Verify model health (send test prompt to /v1/chat/completions)
+3. Mark models as READY / DEGRADED / UNAVAILABLE
+4. Router only routes to READY models
+```
+
+---
+
+## 7. Model-Routing Architecture
+
+### Router Design
+
+The model router is **not** an LLM. It is a **deterministic classifier** that examines the task and selects the appropriate model. Using an LLM to route to an LLM is circular, slow, and unreliable.
+
+```python
+# Simplified router logic
+class ModelRouter:
+    def route(self, task: Task) -> ModelConfig:
+        # 1. Explicit task type (if set by agent profile)
+        if task.required_capability:
+            return self.registry.get_by_capability(task.required_capability)
+        
+        # 2. Input modality detection
+        if task.has_images or task.has_scanned_pdf:
+            return self.registry.get_by_capability("vision")
+        
+        # 3. Task classification (keyword + heuristic)
+        task_type = self.classifier.classify(task.prompt)
+        
+        if task_type == "coding":
+            return self.registry.get_by_capability("coding")
+        elif task_type == "analysis":
+            return self.registry.get_by_capability("reasoning")
+        else:
+            return self.registry.get_default()
+```
+
+### Classification Strategy
+
+| Signal | Method | Example |
+|--------|--------|---------|
+| **File attachment type** | MIME type check | `.png` → vision, `.py` → coding |
+| **Explicit task type** | Agent profile sets it | Coding agent always uses coding model |
+| **Keyword heuristics** | Regex + keyword sets | "write code", "function", "debug" → coding |
+| **Lightweight classifier** | Small fine-tuned model (optional) | TF-IDF + logistic regression on task prompts |
+| **User override** | UI dropdown | User selects "use vision model" |
+
+### Why Not Use an LLM to Route?
+
+1. **Circular dependency** — You need a model running to choose which model to run.
+2. **Latency** — Adds 2-5s to every request just for routing.
+3. **Reliability** — Small models are unreliable at meta-reasoning about their own capabilities.
+4. **Simplicity** — A 50-line classifier handles 95% of cases correctly.
+
+> [!TIP]
+> For the SIH demo, keyword heuristics + file-type detection is **more than sufficient** and far more impressive than a flaky LLM-based router.
+
+---
+
+## 8. Agent Orchestration Architecture
+
+### Core Loop: Modified ReAct
+
+```
+                    ┌──────────────┐
+                    │   User Task  │
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+                    │    PLAN      │ ◄── Break task into steps
+                    └──────┬───────┘
+                           │
+                    ┌──────▼───────┐
+              ┌────►│    ACT       │ ◄── Select & call tool
+              │     └──────┬───────┘
+              │            │
+              │     ┌──────▼───────┐
+              │     │   OBSERVE    │ ◄── Capture tool output
+              │     └──────┬───────┘
+              │            │
+              │     ┌──────▼───────┐
+              │     │   REFLECT    │ ◄── Evaluate: done? retry? replan?
+              │     └──────┬───────┘
+              │            │
+              │       ┌────┴────┐
+              │       │         │
+              │    ┌──▼──┐  ┌──▼──┐
+              └────┤RETRY│  │DONE │
+                   └─────┘  └──┬──┘
+                               │
+                        ┌──────▼───────┐
+                        │   DELIVER    │ ◄── Generate output artifacts
+                        └──────────────┘
+```
+
+### Agent Profiles
+
+Rather than one monolithic agent, SAGE defines **profiles** — preconfigured agent personalities with specific tool sets and model preferences.
+
+| Profile | Model Preference | Tools Available | Use Case |
+|---------|-----------------|-----------------|----------|
+| `analyst` | reasoning | RAG search, OCR, doc generator | Document analysis, report writing |
+| `coder` | coding | File I/O, code executor, sandbox | Code generation, debugging |
+| `inspector` | vision + reasoning | OCR, RAG, doc generator | Inspection report workflows |
+| `general` | reasoning | All tools | Open-ended tasks |
+
+### Execution State Machine
+
+```python
+class AgentState(Enum):
+    PLANNING = "planning"
+    ACTING = "acting"
+    OBSERVING = "observing"
+    REFLECTING = "reflecting"
+    DELIVERING = "delivering"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class AgentExecution:
+    max_steps: int = 15          # Hard limit to prevent infinite loops
+    max_retries_per_step: int = 3
+    state: AgentState
+    plan: list[Step]
+    history: list[StepResult]    # Full execution trace for audit
+    tools: list[Tool]
+    model: ModelConfig
+```
+
+### Multi-Step Execution Example (Inspection Workflow)
+
+```
+Step 1: [PLAN]    "I need to: (1) OCR the scanned report, (2) extract findings,
+                   (3) search SOPs, (4) reason over findings, (5) generate approval note"
+Step 2: [ACT]     tool=ocr_extract, input=uploaded_scan.pdf
+Step 3: [OBSERVE] OCR output: "Valve V-301 shows 2.1mm wall thinning..."
+Step 4: [ACT]     tool=rag_search, query="V-301 wall thinning threshold SOP"
+Step 5: [OBSERVE] Retrieved SOP-MR-114: "Min wall thickness for V-301: 3.5mm..."
+Step 6: [REFLECT] "Wall thinning is within limits. Valve is acceptable."
+Step 7: [ACT]     tool=generate_word_doc, template="approval_note",
+                   data={finding: "...", sop_ref: "...", recommendation: "APPROVED"}
+Step 8: [DELIVER] approval_note_2026-08-26.docx → user download
+```
+
+---
+
+## 9. Coding Agent Architecture
+
+SAGE builds a **native coding agent profile** within the agent engine — not a wrapper around any external CLI tool.
+
+### Why a Native Coding Agent?
+
+| Concern | Native Agent Advantage |
+|---------|----------------------|
+| **Architecture fit** | ✅ Same Python process, same agent loop, same tool registry as all other agents. |
+| **Control** | ✅ Full control over planning, prompting, and retry logic — customizable per-model. |
+| **Model routing** | ✅ Uses SAGE's unified model router → always gets the best coding model. |
+| **Audit logging** | ✅ Every file read/write, code execution, and test run is logged through SAGE's audit system. |
+| **Sandbox** | ✅ Code execution goes through SAGE's Docker sandbox with network isolation. |
+
+### Coding Agent Profile
+
+```python
+# agent/profiles/coder.py
+CODER_PROFILE = AgentProfile(
+    name="coder",
+    description="Coding agent for code generation, debugging, and execution",
+    model_capability="coding",  # Routes to coding-specialized model
+    tools=[
+        "read_file", "write_file", "list_directory",
+        "execute_code", "run_shell",
+        "lint_check", "run_tests",
+    ],
+    system_prompt="You are a coding agent. Write, execute, test, and verify code...",
+    max_steps=20,
+)
+```
+
+### Coding Workflow Loop
+
+```
+User request → "Write a Python function to parse CSV and calculate averages"
+    │
+    ▼
+[PLAN]     Break into: write code → execute → check output → fix if needed → deliver
+    │
+    ▼
+[ACT]      tool=write_file, path="solution.py", content=<generated code>
+    │
+    ▼
+[ACT]      tool=execute_code, file="solution.py", sandbox=true
+    │
+    ▼
+[OBSERVE]  Execution result: error on line 12 / success with output
+    │
+    ▼
+[REFLECT]  Error? → fix and retry. Success? → verify output correctness.
+    │
+    ▼
+[DELIVER]  Working code file → user download
+```
+
+This gives full control, full audit logging, and unified model routing.
+
+---
+
+## 10. Model Server Selection: vLLM vs Alternatives
+
+### Decision Matrix
+
+| Criterion | vLLM | llama.cpp server | SGLang |
+|-----------|------|-------------------|--------|
+| **Setup complexity** | ⭐⭐⭐ Docker + config | ⭐⭐⭐⭐ Single binary | ⭐⭐⭐ Docker + config |
+| **Multi-platform** | ⚠️ Linux only (Docker on others) | ✅ Win/Mac/Linux native | ⚠️ Linux only |
+| **Concurrent users** | ✅ Continuous batching | ⚠️ Limited batching | ✅ Continuous batching |
+| **Model format** | Safetensors (full/AWQ/GPTQ) + GGUF | GGUF (quantized) | Safetensors + GGUF |
+| **VRAM efficiency** | ⭐⭐⭐⭐⭐ PagedAttention | ⭐⭐⭐ Good (Q4 quants) | ⭐⭐⭐⭐⭐ RadixAttention |
+| **Vision model support** | ✅ Native | ⚠️ Partial (model-dependent) | ✅ Native |
+| **OpenAI-compatible API** | ✅ Built-in | ✅ Built-in | ✅ Built-in |
+| **Air-gap deployment** | ⚠️ Docker + Python deps | ✅ Simple binary + model files | ⚠️ Docker + Python deps |
+| **Production readiness** | ⭐⭐⭐⭐⭐ Enterprise-grade | ⭐⭐⭐ Good for small scale | ⭐⭐⭐⭐ Production-ready |
+| **Multi-model serving** | ✅ Native | ⚠️ Separate processes | ✅ Native |
+
+### Recommendation: Dual-Stack Strategy
+
+**SIH Demo & MVP:** Use **llama.cpp server** (`llama-server`)
+
+**Rationale:**
+1. **Cross-platform** — Single binary runs on Windows/Mac/Linux. Judges may have any OS.
+2. **GGUF quantization** — Essential for fitting models on a 16-24GB GPU.
+3. **Lightweight** — No Docker, no Python runtime, no heavy dependencies.
+4. **Fast startup** — Model loaded and serving in seconds.
+5. **OpenAI-compatible API** — Same `/v1/chat/completions` endpoint as vLLM.
+
+**Production Scale-up:** Use **vLLM**
+
+**Rationale:**
+1. **Continuous batching** — Handles 10-100+ concurrent users efficiently.
+2. **PagedAttention** — Best-in-class VRAM efficiency.
+3. **Multi-model serving** — Serve multiple models from a single process.
+4. **FP8/AWQ quantization** — Better quality than GGUF at similar compression.
+5. **Enterprise-grade** — Battle-tested at scale.
+
+### Abstract Interface — Swap Backends Without Code Changes
+
+```python
+# Abstract interface — both backends expose OpenAI-compatible API
+class ModelClient(Protocol):
+    async def chat(self, model: str, messages: list, tools: list | None) -> Response: ...
+    async def generate(self, model: str, prompt: str, images: list | None) -> Response: ...
+
+class LlamaCppClient(ModelClient): ...   # SIH Demo & MVP
+class VLLMClient(ModelClient): ...       # Production scale-up
+```
+
+Both llama.cpp server and vLLM expose the same OpenAI-compatible `/v1/chat/completions` endpoint, so the `ModelClient` implementation is nearly identical — just a different base URL.
+
+### When to Upgrade from llama.cpp to vLLM
+
+- More than ~5 concurrent users
+- Need for continuous batching (throughput > latency)
+- Running on dedicated Linux GPU server with 48GB+ VRAM
+- Need FP8/AWQ quantization instead of GGUF
+- Need multi-model serving from a single process
+
+---
+
+## 11. Tool/Plugin Architecture
+
+### Tool Registry Pattern
+
+Every tool in SAGE is a Python class that:
+1. Declares its **schema** (name, description, parameters) — this is sent to the LLM for tool selection.
+2. Implements an **execute** method.
+3. Is **auto-discovered** by the registry at startup.
+
+```python
+from sage.tools.base import Tool, ToolResult, tool_param
+
+class FileReadTool(Tool):
+    name = "read_file"
+    description = "Read the contents of a file at the given path"
+    
+    @tool_param("path", str, "Absolute path to the file to read")
+    async def execute(self, path: str) -> ToolResult:
+        # Sandboxed: path must be within allowed directories
+        self.validate_path(path)
+        content = await aiofiles.open(path).read()
+        return ToolResult(success=True, output=content[:10000])
+```
+
+### Tool Catalog (MVP)
+
+| Tool | Category | Description |
+|------|----------|-------------|
+| `read_file` | File I/O | Read file contents |
+| `write_file` | File I/O | Write/create file |
+| `list_directory` | File I/O | List directory contents |
+| `execute_code` | Code Exec | Run Python/JS in sandbox |
+| `run_shell` | Code Exec | Run shell command in sandbox |
+| `rag_search` | Knowledge | Search local knowledge base |
+| `ocr_extract` | Multimodal | Extract text from image/PDF |
+| `vision_analyze` | Multimodal | Analyze image with vision model |
+| `generate_word` | Doc Gen | Generate Word document from template |
+| `generate_pptx` | Doc Gen | Generate PowerPoint presentation |
+| `generate_xlsx` | Doc Gen | Generate Excel spreadsheet |
+| `web_search_local` | Search | Search local document index (not internet) |
+| `calculator` | Utility | Safe math expression evaluation |
+
+### Adding New Tools
+
+```python
+# 1. Create a new file in sage/tools/
+# 2. Implement the Tool base class
+# 3. Register it in tools/__init__.py or use auto-discovery
+# 4. The tool's schema is automatically exposed to the LLM
+# No other changes needed.
+```
+
+---
+
+## 12. Sandbox Architecture & Security
+
+### Design: Docker-Based Isolation
+
+```
+┌───────────────────────────────────┐
+│         SAGE Backend              │
+│  ┌─────────────────────────┐      │
+│  │   Code Execution Tool   │      │
+│  │   ┌─────────────────┐   │      │
+│  │   │  SandboxManager  │──┼──────┼──► Docker API
+│  │   └─────────────────┘   │      │
+│  └─────────────────────────┘      │
+└───────────────────────────────────┘
+         │
+         ▼
+┌────────────────────────────────────┐
+│   Docker Container (ephemeral)     │
+│   ┌──────────────────────────┐     │
+│   │  Python 3.12 runtime     │     │
+│   │  - No network access     │     │
+│   │  - Read-only root FS     │     │
+│   │  - /workspace mounted RW │     │
+│   │  - 512MB memory limit    │     │
+│   │  - 30s execution timeout │     │
+│   │  - Non-root user         │     │
+│   │  - seccomp profile       │     │
+│   └──────────────────────────┘     │
+└────────────────────────────────────┘
+```
+
+### Security Layers
+
+| Layer | Mechanism | Purpose |
+|-------|-----------|---------|
+| 1 | **Docker isolation** | Separate PID/network/mount namespace |
+| 2 | **Network disabled** | `--network=none` — no egress possible |
+| 3 | **Resource limits** | `--memory=512m --cpus=1 --pids-limit=100` |
+| 4 | **Timeout** | 30-second hard kill |
+| 5 | **Read-only rootfs** | Cannot modify system binaries |
+| 6 | **Non-root user** | Runs as `uid=1000` inside container |
+| 7 | **Seccomp profile** | Blocks dangerous syscalls |
+| 8 | **Path validation** | SAGE validates all file paths before passing to sandbox |
+
+### Sandbox for SIH Demo (Simplified)
+
+For the demo, use `subprocess` with:
+- `timeout` enforced
+- Restricted to a temporary directory
+- No network (OS-level firewall rule on the subprocess)
+
+Docker sandbox is for production.
+
+---
+
+## 13. Local RAG / Knowledge-Base Architecture
+
+### Pipeline Architecture
+
+```
+   Documents (PDF, DOCX, TXT, images)
+         │
+         ▼
+   ┌─────────────┐
+   │   PARSER     │  ◄── Apache Tika / PyMuPDF / python-docx
+   │  (extract    │      Convert to structured markdown
+   │   structured │      Preserve tables, headings, sections
+   │   content)   │
+   └──────┬──────┘
+          │
+          ▼
+   ┌─────────────┐
+   │   CHUNKER    │  ◄── Recursive character + semantic chunking
+   │  (smart      │      Respect section boundaries
+   │   splitting) │      Include metadata (source, page, section)
+   └──────┬──────┘
+          │
+          ▼
+   ┌──────────────┐
+   │   EMBEDDER    │  ◄── BGE-M3 or nomic-embed-text (local)
+   │  (vectorize)  │      Dense + sparse vectors
+   └──────┬───────┘
+          │
+          ▼
+   ┌──────────────┐
+   │   pgvector    │  ◄── PostgreSQL extension
+   │  (store)      │      Stores vectors + metadata + source text
+   └──────────────┘
+```
+
+### Retrieval Strategy: Hybrid Search
+
+```python
+def hybrid_search(query: str, top_k: int = 5) -> list[Chunk]:
+    # 1. Dense vector search (semantic similarity)
+    dense_results = pgvector_search(embed(query), top_k=top_k * 2)
+    
+    # 2. BM25 keyword search (exact term matching)
+    bm25_results = bm25_search(query, top_k=top_k * 2)
+    
+    # 3. Reciprocal Rank Fusion
+    fused = reciprocal_rank_fusion(dense_results, bm25_results)
+    
+    # 4. Return top-k with source attribution
+    return fused[:top_k]
+```
+
+### Why pgvector Over ChromaDB or Milvus?
+
+| | pgvector | ChromaDB | Milvus |
+|-|----------|----------|--------|
+| **Operational overhead** | Zero (PostgreSQL extension) | Separate process | Full cluster |
+| **ACID transactions** | ✅ | ❌ | ❌ |
+| **Relational data** | Same DB | Separate DB needed | Separate DB needed |
+| **Air-gap deployment** | ✅ Trivial | ✅ Easy | ⚠️ Complex |
+| **Scale needed for SIH** | <100K docs → perfect | OK | Overkill |
+| **BM25 support** | Via `pg_trgm` + `tsvector` | Plugin | Built-in |
+
+### Document Ingestion
+
+```
+sage-admin ingest --source /path/to/SOPs/ --collection "sops"
+sage-admin ingest --source /path/to/reports/ --collection "inspection_reports"
+```
+
+Each document gets:
+- Parsed into structured text (preserving tables, headings)
+- Split into chunks (512-1024 tokens, with overlap)
+- Each chunk embedded and stored with metadata:
+  - `source_file`, `page_number`, `section_heading`, `collection`, `ingested_at`
+
+---
+
+## 14. OCR & Multimodal Pipeline
+
+### Pipeline Architecture
+
+```
+Input (image/scanned PDF)
+       │
+       ├──► Is it a scanned PDF?
+       │    Yes ──► pdf2image (extract pages as images)
+       │    No  ──► Use image directly
+       │
+       ▼
+   ┌──────────────────────────────┐
+   │   Stage 1: OCR              │
+   │   Tesseract (fast, good     │
+   │   for clean text)           │
+   │   + PaddleOCR (better for   │
+   │   complex layouts, tables)  │
+   └──────────┬───────────────────┘
+              │
+              ▼
+   ┌──────────────────────────────┐
+   │   Stage 2: Vision LLM       │
+   │   (If OCR alone insufficient)│
+   │   Qwen2.5-VL-7B             │
+   │   "Describe this engineering │
+   │    drawing / P&ID / form"   │
+   └──────────┬───────────────────┘
+              │
+              ▼
+   ┌──────────────────────────────┐
+   │   Stage 3: Structured       │
+   │   Extraction                │
+   │   LLM parses OCR + vision   │
+   │   output into structured    │
+   │   Pydantic schema           │
+   └──────────────────────────────┘
+```
+
+### Why Two-Stage OCR?
+
+1. **Tesseract** is fast and reliable for printed English text. Use it as the primary OCR.
+2. **PaddleOCR** handles complex layouts (tables, multi-column, handwritten) better. Use it as fallback or for specific document types.
+3. **Vision LLM** is the "understanding" layer — it doesn't just extract text; it *interprets* diagrams, P&IDs, and handwritten annotations.
+
+### Handling Specific Document Types
+
+| Document Type | OCR Strategy | Vision Strategy |
+|--------------|-------------|-----------------|
+| Printed form | Tesseract (sufficient) | Not needed |
+| Scanned table | PaddleOCR (layout-aware) | Verify table structure |
+| Handwritten notes | PaddleOCR + Vision LLM | LLM interprets handwriting |
+| Engineering drawing | Minimal OCR (labels only) | Vision LLM describes components |
+| P&ID | PaddleOCR for tags/labels | Vision LLM identifies flow/connections |
+
+---
+
+## 15. Document Generation Pipeline
+
+### Schema-First Architecture
+
+```
+Agent Output (structured JSON/Pydantic)
+       │
+       ▼
+   ┌──────────────────────────────┐
+   │   Pydantic Validation        │
+   │   Ensures all required       │
+   │   fields are present         │
+   └──────────┬───────────────────┘
+              │
+              ▼
+   ┌──────────────────────────────┐
+   │   Template Engine            │
+   │   ┌────────────────────┐     │
+   │   │ Word: docx-template│     │
+   │   │ PPTX: python-pptx  │     │
+   │   │ XLSX: openpyxl      │     │
+   │   │ Code: direct write  │     │
+   │   └────────────────────┘     │
+   └──────────┬───────────────────┘
+              │
+              ▼
+   ┌──────────────────────────────┐
+   │   Output File                │
+   │   Saved to /workspace/output │
+   │   Served via API download    │
+   └──────────────────────────────┘
+```
+
+### Word Document Generation
+
+```python
+# Template approach using python-docx-template
+from docxtpl import DocxTemplate
+
+class WordGenerator:
+    def generate(self, template_name: str, data: dict, output_path: str):
+        tpl = DocxTemplate(f"templates/{template_name}.docx")
+        tpl.render(data)
+        tpl.save(output_path)
+```
+
+**Template example (approval_note.docx):**
+```
+APPROVAL NOTE
+Date: {{ date }}
+Reference: {{ reference_number }}
+
+Subject: {{ subject }}
+
+Findings:
+{% for finding in findings %}
+  {{ loop.index }}. {{ finding.description }}
+     Status: {{ finding.status }}
+     SOP Reference: {{ finding.sop_ref }}
+{% endfor %}
+
+Recommendation: {{ recommendation }}
+
+Prepared by: SAGE Agentic AI System
+Reviewed by: ________________________
+```
+
+### Deliverable Types
+
+| Type | Library | Template-Driven? | Notes |
+|------|---------|-------------------|-------|
+| Word (.docx) | `python-docx-template` | ✅ Yes | Jinja2 tags in .docx files |
+| PowerPoint (.pptx) | `python-pptx` | ✅ Yes (master slides) | Builder pattern for slides |
+| Excel (.xlsx) | `openpyxl` | ⚠️ Partial | Programmatic cell writing |
+| Code files | Direct file write | ❌ | Agent writes code directly |
+| PDF | `weasyprint` or `reportlab` | ✅ HTML→PDF | For formal reports |
+
+---
+
+## 16. Backend Architecture
+
+### FastAPI Application Structure
+
+```python
+# main.py
+from fastapi import FastAPI
+from sage.api import chat, tasks, documents, admin, auth
+from sage.middleware import AuditMiddleware, AuthMiddleware
+
+app = FastAPI(title="SAGE", version="1.0.0")
+
+# Middleware (order matters)
+app.add_middleware(AuditMiddleware)     # Log every request
+app.add_middleware(AuthMiddleware)      # Authenticate requests
+
+# Routes
+app.include_router(auth.router, prefix="/api/auth")
+app.include_router(chat.router, prefix="/api/chat")
+app.include_router(tasks.router, prefix="/api/tasks")
+app.include_router(documents.router, prefix="/api/documents")
+app.include_router(admin.router, prefix="/api/admin")
+
+# WebSocket for streaming
+app.include_router(chat.ws_router, prefix="/ws")
+```
+
+### Key Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/auth/login` | Authenticate user |
+| `POST` | `/api/chat/message` | Send message to agent |
+| `WS` | `/ws/chat/{session_id}` | Stream agent responses |
+| `GET` | `/api/tasks/{task_id}` | Get task status |
+| `GET` | `/api/tasks/{task_id}/steps` | Get execution steps (audit) |
+| `GET` | `/api/documents/{doc_id}/download` | Download generated document |
+| `POST` | `/api/admin/ingest` | Ingest documents into RAG |
+| `GET` | `/api/admin/models` | List available models |
+| `GET` | `/api/admin/network-log` | View network activity log |
+| `GET` | `/api/admin/audit-log` | View audit trail |
+
+### Streaming Architecture
+
+```
+Browser ◄──── WebSocket ────► FastAPI ◄──── HTTP SSE ────► Model Server (vLLM / llama.cpp)
+         (token-by-token)              (token-by-token)
+```
+
+Agent responses stream token-by-token to the UI via WebSocket. Tool calls and results are sent as structured JSON messages interleaved with the stream.
+
+---
+
+## 17. Frontend / UI Architecture
+
+### Technology: Next.js 14+ with App Router
+
+### Page Structure
+
+```
+app/
+├── layout.tsx              # Root layout with sidebar
+├── page.tsx                # Dashboard / home
+├── login/page.tsx          # Authentication
+├── chat/
+│   └── [sessionId]/page.tsx  # Main chat + agent interface
+├── documents/
+│   └── page.tsx            # Document browser + download
+├── knowledge/
+│   └── page.tsx            # RAG knowledge base management
+├── admin/
+│   ├── models/page.tsx     # Model management
+│   ├── audit/page.tsx      # Audit log viewer
+│   └── network/page.tsx    # Network activity monitor
+└── components/
+    ├── ChatWindow.tsx       # Main chat component
+    ├── AgentSteps.tsx       # Shows agent thinking/planning steps
+    ├── ToolCallCard.tsx     # Shows tool execution + results
+    ├── DocumentPreview.tsx  # Preview generated docs
+    ├── NetworkMonitor.tsx   # Real-time network activity
+    └── ModelSelector.tsx    # Model routing indicator
+```
+
+### Key UI Features
+
+1. **Chat Interface** — Standard chat with streaming responses.
+2. **Agent Transparency Panel** — Shows the agent's plan, current step, tool calls, and reasoning. This is critical for the SIH demo to demonstrate agentic behavior.
+3. **Document Preview** — Inline preview of generated Word/PPTX/XLSX files.
+4. **Network Monitor** — Real-time display of all network connections, proving sovereignty.
+5. **Audit Trail** — Searchable log of all agent actions, model calls, and tool executions.
+6. **Model Indicator** — Shows which model is being used for each response.
+
+### Design Aesthetic
+
+- **Dark mode** default (industrial/professional feel)
+- **Glassmorphism** cards for agent steps
+- **Color-coded** tool calls (green = success, amber = retry, red = error)
+- **Animated** thinking/planning indicators
+- **Monospace font** for code and logs
+
+---
+
+## 18. Authentication & Authorization
+
+### MVP: Simple JWT Auth
+
+For SIH demo and initial deployment, keep it simple:
+
+```python
+# auth/service.py
+class AuthService:
+    def login(self, username: str, password: str) -> TokenPair:
+        user = self.db.get_user(username)
+        if not user or not bcrypt.verify(password, user.password_hash):
+            raise AuthError("Invalid credentials")
+        return TokenPair(
+            access_token=jwt.encode({"sub": user.id, "role": user.role}, SECRET),
+            refresh_token=jwt.encode({"sub": user.id, "type": "refresh"}, SECRET)
+        )
+```
+
+### Roles
+
+| Role | Permissions |
+|------|------------|
+| `user` | Chat, view own history, download own documents |
+| `analyst` | User + ingest documents, manage knowledge base |
+| `admin` | All + manage models, view audit logs, manage users |
+
+### Production Enhancement
+
+For production deployment in a defence/PSU environment, integrate with:
+- **LDAP/Active Directory** (most likely already deployed)
+- **Keycloak** (if SSO is required)
+
+---
+
+## 19. Audit Logging
+
+### What Gets Logged
+
+| Event | Fields Captured |
+|-------|----------------|
+| **User action** | user_id, action, timestamp, IP, session |
+| **Agent step** | step_type, model_used, prompt_hash, latency |
+| **Tool call** | tool_name, parameters (sanitized), result_summary, duration |
+| **Model inference** | model_id, prompt_tokens, completion_tokens, latency |
+| **File operation** | operation (read/write/delete), path, size, user_id |
+| **Network activity** | destination_ip, port, protocol, bytes, blocked? |
+| **Auth event** | login/logout, success/failure, user_id, IP |
+
+### Log Format
+
+```json
+{
+  "timestamp": "2026-08-26T15:01:33+05:30",
+  "level": "INFO",
+  "event": "tool_call",
+  "session_id": "abc-123",
+  "user_id": "user_01",
+  "data": {
+    "tool": "rag_search",
+    "query": "V-301 wall thinning SOP",
+    "results_count": 3,
+    "latency_ms": 245
+  }
+}
+```
+
+### Storage
+
+- **Hot logs:** PostgreSQL `audit_logs` table (searchable, queryable)
+- **Cold logs:** JSON files rotated daily in `/var/log/sage/`
+- **Retention:** Configurable (default: 90 days in DB, 1 year on disk)
+
+---
+
+## 20. Network Isolation / Air-Gapped Architecture
+
+### Network Architecture
+
+```
+┌──────────────────── SAGE HOST ────────────────────┐
+│                                                     │
+│   ┌─────────────────────────────────────────┐      │
+│   │  iptables / nftables rules:              │      │
+│   │  - ALLOW localhost:* ↔ localhost:*        │      │
+│   │  - ALLOW internal_network:* (optional)   │      │
+│   │  - DROP ALL outbound to 0.0.0.0/0        │      │
+│   │  - LOG all blocked connections           │      │
+│   └─────────────────────────────────────────┘      │
+│                                                     │
+│   ┌─────────────────────────────────────────┐      │
+│   │  Network Monitor Daemon                  │      │
+│   │  - tcpdump logging all interfaces        │      │
+│   │  - Alerts on any external connection     │      │
+│   │  - Dashboard feed via WebSocket          │      │
+│   └─────────────────────────────────────────┘      │
+│                                                     │
+│   ┌──────────────────────────────────────────┐     │
+│   │  SAGE Application                         │     │
+│   │  (all connections are localhost only)     │     │
+│   └──────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────┘
+```
+
+### Air-Gap Deployment Procedure
+
+```bash
+# On internet-connected machine (preparation):
+1. Pull all Docker images
+2. Download all GGUF model files (from HuggingFace)
+3. Download llama.cpp server binary (or vLLM Docker image)
+4. Download all Python/npm packages
+5. Bundle everything into a tarball
+
+# On air-gapped machine:
+1. Transfer tarball via USB/secure media
+2. Load Docker images: docker load < sage-images.tar
+3. Copy GGUF model files to /opt/sage/models/
+4. Install Python packages from local wheelhouse
+5. npm install from local cache
+6. Run: docker compose up
+7. Verify: sage-admin verify-airgap
+```
+
+### `sage-admin verify-airgap` Command
+
+This command:
+1. Starts a 60-second `tcpdump` capture.
+2. Runs a sample agent workflow.
+3. Analyzes the capture for any non-localhost traffic.
+4. Generates a sovereignty verification report.
+
+---
+
+## 21. Security Threat Model
+
+| Threat | Severity | Mitigation |
+|--------|----------|------------|
+| **Data exfiltration via model** | CRITICAL | Models are local, no API calls, network blocked |
+| **Prompt injection** | HIGH | Input sanitization, tool result validation, structured outputs |
+| **Sandbox escape** | HIGH | Docker isolation, seccomp, resource limits, no network |
+| **Unauthorized access** | HIGH | JWT auth, role-based access, audit logging |
+| **Model poisoning** | MEDIUM | Model checksums verified at load time |
+| **Denial of service** | MEDIUM | Rate limiting, execution timeouts, resource quotas |
+| **Supply chain attack** | MEDIUM | Pin all dependency versions, verify checksums |
+| **Log tampering** | MEDIUM | Append-only log files, hash chain |
+| **Path traversal** | MEDIUM | All file paths validated against allowed directories |
+| **LLM hallucination** | MEDIUM | RAG with source attribution, human-in-the-loop for critical outputs |
+
+---
+
+## 22. Data Flow
+
+### End-to-End Data Flow (Inspection Workflow)
+
+```
+User uploads scanned_report.pdf via UI
+    │
+    ▼
+[1] API Gateway receives file
+    │ Logged: file_upload, user_id, filename, size, hash
+    │
+    ▼
+[2] Agent Engine starts execution
+    │ State: PLANNING
+    │ Model Router → selects vision model
+    │
+    ▼
+[3] OCR Tool extracts text from PDF
+    │ Tesseract + PaddleOCR → structured text
+    │ Logged: tool_call, ocr_extract, latency
+    │
+    ▼
+[4] Vision LLM analyzes images (if needed)
+    │ Model Server (Qwen2.5-VL-7B) → description
+    │ Logged: model_inference, tokens, latency
+    │
+    ▼
+[5] RAG Search retrieves relevant SOPs
+    │ Query → pgvector hybrid search → top-5 chunks
+    │ Logged: tool_call, rag_search, query, results_count
+    │
+    ▼
+[6] Reasoning LLM generates analysis
+    │ Model Server (Qwen3-8B) → structured findings
+    │ Logged: model_inference, tokens, latency
+    │
+    ▼
+[7] Document Generator creates Word file
+    │ Pydantic validation → docx-template render
+    │ Logged: tool_call, generate_word, output_path
+    │
+    ▼
+[8] Output delivered to user
+    │ File stored in /workspace/outputs/
+    │ User can download via UI
+    │ Logged: file_download, user_id, doc_id
+```
+
+**Every single step is logged. No data leaves the machine.**
+
+---
+
+## 23. API Design
+
+### OpenAI-Compatible Model API (Internal)
+
+SAGE's model client speaks the OpenAI chat completion format. Both vLLM and llama.cpp server natively expose this API.
+
+```
+POST http://localhost:8001/v1/chat/completions
+{
+  "model": "qwen3-8b",
+  "messages": [...],
+  "tools": [...],     // Tool definitions
+  "stream": true
+}
+```
+
+### SAGE REST API
+
+```yaml
+openapi: 3.0.0
+paths:
+  /api/chat/sessions:
+    post:
+      summary: Create new chat session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                profile: { type: string, enum: [general, analyst, coder, inspector] }
+  
+  /api/chat/sessions/{sessionId}/messages:
+    post:
+      summary: Send message to agent
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                message: { type: string }
+                attachments: { type: array, items: { type: file } }
+  
+  /api/documents/{docId}:
+    get:
+      summary: Download generated document
+  
+  /api/admin/knowledge/ingest:
+    post:
+      summary: Ingest documents into knowledge base
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files: { type: array, items: { type: file } }
+                collection: { type: string }
+  
+  /api/admin/network-log:
+    get:
+      summary: Get network activity log
+      parameters:
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+  
+  /api/admin/sovereignty-report:
+    get:
+      summary: Generate sovereignty verification report
+```
+
+---
+
+## 24. Folder / Repository Structure
+
+```
+SAGE/
+├── README.md
+├── docker-compose.yml           # Single-command deployment
+├── docker-compose.dev.yml       # Development overrides
+├── Dockerfile.backend           # Python backend
+├── Dockerfile.frontend          # Next.js frontend
+├── Dockerfile.sandbox           # Code execution sandbox image
+├── Makefile                     # Common commands
+│
+├── backend/                     # Python backend (FastAPI)
+│   ├── pyproject.toml
+│   ├── sage/
+│   │   ├── __init__.py
+│   │   ├── main.py              # FastAPI app entry point
+│   │   ├── config.py            # Configuration (env vars, YAML)
+│   │   │
+│   │   ├── api/                 # API routes
+│   │   │   ├── chat.py
+│   │   │   ├── tasks.py
+│   │   │   ├── documents.py
+│   │   │   ├── admin.py
+│   │   │   └── auth.py
+│   │   │
+│   │   ├── agent/               # Agent orchestration
+│   │   │   ├── engine.py        # Main ReAct loop
+│   │   │   ├── planner.py       # Task planning
+│   │   │   ├── executor.py      # Step executor
+│   │   │   ├── router.py        # Model routing
+│   │   │   ├── state.py         # Execution state machine
+│   │   │   └── profiles/        # Agent profiles
+│   │   │       ├── general.py
+│   │   │       ├── analyst.py
+│   │   │       ├── coder.py
+│   │   │       └── inspector.py
+│   │   │
+│   │   ├── models/              # Model management
+│   │   │   ├── registry.py      # Model registry
+│   │   │   ├── client.py        # Model server client abstraction (OpenAI-compatible)
+│   │   │   └── health.py        # Model health checks
+│   │   │
+│   │   ├── tools/               # Tool implementations
+│   │   │   ├── base.py          # Tool base class + registry
+│   │   │   ├── file_ops.py
+│   │   │   ├── code_executor.py
+│   │   │   ├── rag_search.py
+│   │   │   ├── ocr.py
+│   │   │   ├── vision.py
+│   │   │   ├── doc_generator.py
+│   │   │   ├── spreadsheet.py
+│   │   │   └── calculator.py
+│   │   │
+│   │   ├── rag/                 # RAG pipeline
+│   │   │   ├── ingestion.py
+│   │   │   ├── chunker.py
+│   │   │   ├── embedder.py
+│   │   │   └── retriever.py
+│   │   │
+│   │   ├── docgen/              # Document generation
+│   │   │   ├── word.py
+│   │   │   ├── pptx.py
+│   │   │   ├── xlsx.py
+│   │   │   └── templates/       # .docx/.pptx templates
+│   │   │
+│   │   ├── multimodal/          # OCR & vision
+│   │   │   ├── ocr_engine.py
+│   │   │   └── vision_processor.py
+│   │   │
+│   │   ├── sandbox/             # Code execution
+│   │   │   ├── manager.py
+│   │   │   └── security.py
+│   │   │
+│   │   ├── auth/                # Authentication
+│   │   │   ├── service.py
+│   │   │   └── middleware.py
+│   │   │
+│   │   ├── audit/               # Audit logging
+│   │   │   ├── logger.py
+│   │   │   └── network_monitor.py
+│   │   │
+│   │   ├── db/                  # Database
+│   │   │   ├── models.py        # SQLAlchemy models
+│   │   │   └── migrations/      # Alembic migrations
+│   │   │
+│   │   └── core/                # Shared utilities
+│   │       ├── schemas.py       # Pydantic schemas
+│   │       ├── exceptions.py
+│   │       └── utils.py
+│   │
+│   └── tests/
+│       ├── test_agent/
+│       ├── test_tools/
+│       ├── test_rag/
+│       └── test_api/
+│
+├── frontend/                    # Next.js frontend
+│   ├── package.json
+│   ├── app/
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   ├── chat/
+│   │   ├── documents/
+│   │   ├── knowledge/
+│   │   └── admin/
+│   ├── components/
+│   │   ├── ChatWindow.tsx
+│   │   ├── AgentSteps.tsx
+│   │   ├── ToolCallCard.tsx
+│   │   ├── NetworkMonitor.tsx
+│   │   └── DocumentPreview.tsx
+│   └── lib/
+│       ├── api.ts
+│       └── websocket.ts
+│
+├── config/                      # Configuration
+│   ├── model_registry.yaml      # Model definitions
+│   ├── tool_registry.yaml       # Tool configuration
+│   └── sage.yaml                # Main config
+│
+├── scripts/                     # Utility scripts
+│   ├── setup.sh                 # First-time setup
+│   ├── airgap-bundle.sh         # Create air-gap deployment bundle
+│   ├── verify-sovereignty.sh    # Network verification
+│   └── seed-models.sh           # Download/verify models
+│
+├── templates/                   # Document templates
+│   ├── approval_note.docx
+│   ├── inspection_report.docx
+│   └── presentation.pptx
+│
+└── docs/                        # Documentation
+    ├── architecture.md
+    ├── deployment.md
+    ├── adding-models.md
+    └── adding-tools.md
+```
+
+---
+
+## 25. Development Phases
+
+### Phase 0: Foundation (Week 1-2)
+**Goal:** Skeleton that compiles, model server running, basic chat working.
+
+- [ ] Project scaffolding (repo structure, Docker Compose)
+- [ ] FastAPI backend with health check endpoints
+- [ ] llama.cpp server setup with one model (Qwen3-8B Q4_K_M GGUF)
+- [ ] Basic model client abstraction
+- [ ] Simple chat endpoint (no agent loop — direct LLM call)
+- [ ] Next.js frontend scaffold with basic chat UI
+- [ ] WebSocket streaming (token-by-token)
+- [ ] PostgreSQL setup with initial schema
+- [ ] Basic JWT auth
+
+### Phase 1: Agent Core (Week 3-4)
+**Goal:** Working ReAct agent loop with basic tools.
+
+- [ ] Agent engine (plan → act → observe → reflect loop)
+- [ ] Tool base class and registry
+- [ ] File I/O tools (read_file, write_file, list_dir)
+- [ ] Model router (keyword heuristic + file-type detection)
+- [ ] Agent step visualization in UI
+- [ ] Structured audit logging
+- [ ] Configuration system (YAML-based)
+
+### Phase 2: Multimodal + RAG (Week 5-6)
+**Goal:** OCR, vision model, RAG pipeline working end-to-end.
+
+- [ ] OCR engine (Tesseract + PaddleOCR)
+- [ ] Vision model integration (Qwen2.5-VL-7B)
+- [ ] RAG ingestion pipeline (parse → chunk → embed → store)
+- [ ] pgvector setup and hybrid retrieval
+- [ ] Embedding model (BGE-M3 or nomic-embed-text)
+- [ ] RAG search tool
+- [ ] Knowledge base management UI
+- [ ] Multi-model serving (reasoning + vision concurrently)
+
+### Phase 3: Document Generation + Coding Agent (Week 7-8)
+**Goal:** Deliverables pipeline and coding workflow complete.
+
+- [ ] Word document generation (docx-template)
+- [ ] PowerPoint generation
+- [ ] Excel generation
+- [ ] Document templates (approval note, inspection report)
+- [ ] Code execution sandbox (Docker-based or subprocess)
+- [ ] Coding agent profile (write → execute → verify → deliver)
+- [ ] Document download and preview in UI
+- [ ] Calculator tool
+
+### Phase 4: Sovereignty + Polish (Week 9-10)
+**Goal:** Network monitoring, audit UI, sovereignty proof, SIH demo readiness.
+
+- [ ] Network monitor daemon (tcpdump-based)
+- [ ] Network activity dashboard in UI
+- [ ] Air-gap mode configuration
+- [ ] `sage-admin verify-airgap` command
+- [ ] Sovereignty verification report generation
+- [ ] Audit log viewer in UI
+- [ ] Agent profiles (analyst, coder, inspector)
+- [ ] End-to-end demo workflows
+- [ ] Performance optimization
+- [ ] Error handling and fallback mechanisms
+- [ ] Documentation
+
+---
+
+## 26. MVP vs Advanced Features
+
+### MVP (SIH Demo Ready)
+
+| Feature | Status |
+|---------|--------|
+| Chat with local LLM (streaming) | MVP |
+| Agent loop (plan/act/observe) | MVP |
+| Model routing (2+ task types) | MVP |
+| OCR (Tesseract) | MVP |
+| Vision model (Qwen2.5-VL) | MVP |
+| RAG (basic: ingest + search) | MVP |
+| Word document generation | MVP |
+| Code execution (subprocess sandbox) | MVP |
+| Audit logging | MVP |
+| Network activity display | MVP |
+| Basic auth (JWT) | MVP |
+| Agent transparency UI | MVP |
+
+### Advanced (Post-SIH)
+
+| Feature | Phase |
+|---------|-------|
+| vLLM migration for production scale | Post-MVP |
+| Docker sandbox for code execution | Post-MVP |
+| LDAP/AD integration | Post-MVP |
+| Fine-tuned task classifier for routing | Post-MVP |
+| Streaming document preview | Post-MVP |
+| Multi-user concurrent sessions | Post-MVP |
+| Model fine-tuning pipeline | Advanced |
+| Multi-agent collaboration | Advanced |
+| Workflow templates (predefined multi-step flows) | Advanced |
+| Custom tool development SDK | Advanced |
+| Kubernetes deployment | Advanced |
+| HA / failover | Advanced |
+
+---
+
+## 27. SIH Demo Strategy
+
+### Demo Structure (15-20 minutes)
+
+> [!IMPORTANT]
+> The demo should be scripted, rehearsed, and run on pre-warmed models. Cold model loading takes 10-30 seconds and kills demo flow.
+
+#### Opening (2 min)
+- Show the SAGE dashboard. Explain the architecture briefly.
+- Show the Network Monitor — "Notice: zero external connections."
+
+#### Demo A: Model Routing (3 min)
+1. Type a **document analysis** query → UI shows "Routing to: Qwen3-8B (Reasoning)"
+2. Type a **coding** query → UI shows "Routing to: Qwen3-Coder-8B (Coding)"
+3. Upload an **image** → UI shows "Routing to: Qwen2.5-VL-7B (Vision)"
+4. **Highlight:** "The system automatically selects the right model. No user intervention needed."
+
+#### Demo B: Inspection Workflow (5 min)
+1. Upload a scanned inspection report (prepared beforehand).
+2. Show the Agent Steps panel: "Planning... Step 1: OCR... Step 2: Search SOPs... Step 3: Analyze..."
+3. Agent runs OCR → extracts findings → searches RAG → reasons → generates approval note.
+4. Download the generated Word document. Open it. Show it's a professional, structured document.
+5. **Highlight:** "End-to-end automation. From a scanned PDF to an approval note. No external API. No data left this machine."
+
+#### Demo C: Coding Workflow (3 min)
+1. Ask: "Write a Python function to parse CSV data and calculate monthly averages."
+2. Agent: Plans → writes code → executes in sandbox → tests → delivers working code file.
+3. Show the output file and execution results.
+4. **Highlight:** "The agent doesn't just generate code. It executes, tests, and verifies."
+
+#### Demo D: Multimodal (3 min)
+1. Upload an engineering drawing or P&ID diagram.
+2. Vision model describes the diagram.
+3. Agent extracts structured information (components, connections, labels).
+4. **Highlight:** "This handles real industrial documents — drawings, handwritten notes, P&IDs."
+
+#### Demo E: Sovereignty Proof (3 min)
+1. Open the Network Monitor → show zero external connections.
+2. Run `sage-admin verify-airgap` → show the sovereignty report.
+3. Open the Audit Log → show every model call, tool execution, file operation.
+4. **Highlight:** "Every byte is accounted for. Every action is logged. Nothing left this machine."
+
+### Pre-Demo Preparation
+
+```
+1. Pre-warm all models (run a dummy prompt to each)
+2. Pre-ingest sample SOPs into RAG knowledge base
+3. Pre-download all dependencies (verify offline operation)
+4. Prepare sample inputs:
+   - Scanned inspection report (PDF)
+   - Engineering drawing (PNG/PDF)
+   - Coding task (text prompt)
+5. Run full demo 3 times to ensure reliability
+6. Have fallback screenshots/recordings if live demo fails
+```
+
+---
+
+## 28. Hardware Requirements
+
+### SIH Demo (Minimum)
+
+| Component | Specification | Notes |
+|-----------|--------------|-------|
+| **GPU** | NVIDIA RTX 3060 12GB or RTX 4060 Ti 16GB | Runs 1 quantized model at a time |
+| **RAM** | 32 GB DDR4 | Backend + DB + model loading overhead |
+| **CPU** | Intel i7/Ryzen 7 (8+ cores) | OCR is CPU-intensive |
+| **Storage** | 256 GB SSD | ~30GB for models, ~10GB for system, rest for documents |
+| **OS** | Ubuntu 22.04 LTS or Windows 11 + WSL2 | Linux preferred for Docker/networking |
+
+### Comfortable Demo (Recommended)
+
+| Component | Specification | Notes |
+|-----------|--------------|-------|
+| **GPU** | NVIDIA RTX 4070 Ti 12GB or RTX 4090 24GB | Can keep 2 models loaded simultaneously |
+| **RAM** | 64 GB DDR5 | Comfortable headroom |
+| **CPU** | Intel i9/Ryzen 9 (12+ cores) | Fast OCR + document processing |
+| **Storage** | 512 GB NVMe SSD | Room for multiple model variants |
+
+### Production (Target)
+
+| Component | Specification | Notes |
+|-----------|--------------|-------|
+| **GPU** | 2× NVIDIA A6000 48GB or 1× A100 80GB | Multiple models loaded concurrently |
+| **RAM** | 128 GB ECC DDR5 | |
+| **CPU** | AMD EPYC or Intel Xeon (32+ cores) | |
+| **Storage** | 2 TB NVMe + 10 TB HDD | Models + document archive |
+
+---
+
+## 29. Model Recommendations
+
+### Model Selection Matrix (SIH Demo — 16-24GB VRAM)
+
+| Task | Model | Size (Q4) | VRAM | Why |
+|------|-------|-----------|------|-----|
+| **Reasoning / General** | Qwen3-8B-Instruct | ~5 GB | ~6 GB | Best overall quality for size; strong reasoning and tool-calling |
+| **Coding** | Qwen3-Coder-8B | ~5 GB | ~6 GB | Purpose-built for code; excellent agentic coding performance |
+| **Vision / OCR** | Qwen2.5-VL-7B-Instruct | ~5 GB | ~6 GB | Strong vision understanding; handles documents, diagrams, handwriting |
+| **Embedding** | nomic-embed-text (137M) | ~270 MB | <1 GB | Fast, local, good quality for RAG; served via sentence-transformers |
+
+**Total VRAM (worst case, all loaded):** ~19 GB — fits on a 24GB GPU.
+
+**On 12-16GB VRAM:** Swap models between tasks. Keep reasoning model hot-loaded. Vision and coding models loaded on-demand (~10s swap time).
+
+### Alternative Models
+
+| Task | Alternative | Trade-off |
+|------|-------------|-----------|
+| Reasoning | Phi-4-mini (3.8B) | Smaller but less capable; good for very constrained hardware |
+| Reasoning | Gemma-4-12B | Excellent quality but needs more VRAM |
+| Coding | DeepSeek-Coder-V2-Lite (16B) | Better quality but larger |
+| Vision | Phi-4-Multimodal (5.6B) | Smaller, good for charts/docs |
+| Embedding | BGE-M3 | Better quality (dense+sparse) but heavier |
+
+---
+
+## 30. How Models Can Be Added Later
+
+### Step 1: Add to Registry
+
+```yaml
+# config/model_registry.yaml
+models:
+  - id: gemma-4-12b
+    name: "Gemma 4 12B"
+    model_path: "/opt/sage/models/gemma-4-12b-Q4_K_M.gguf"
+    server_port: 8004
+    capabilities: ["reasoning", "analysis"]
+    priority: 2                    # Lower = preferred
+    min_vram_gb: 8
+    context_length: 32768
+    
+  - id: deepseek-coder-v2
+    name: "DeepSeek Coder V2"
+    model_path: "/opt/sage/models/deepseek-coder-v2-16b-Q4_K_M.gguf"
+    server_port: 8005
+    capabilities: ["coding"]
+    priority: 1
+    min_vram_gb: 10
+    context_length: 65536
+```
+
+### Step 2: Download the Model
+
+```bash
+# Download GGUF from HuggingFace (on internet-connected machine)
+huggingface-cli download bartowski/gemma-4-12b-GGUF --include "*Q4_K_M*" --local-dir /opt/sage/models/
+```
+
+### Step 3: Restart SAGE
+
+The model registry auto-discovers new models at startup. No code changes needed. The router automatically routes to the new model based on its declared capabilities and priority.
+
+### Design Principles for Model Extensibility
+
+1. **Models are data, not code.** Adding a model is a YAML config change, not a code change.
+2. **Capabilities are tags.** `["reasoning", "coding"]` — the router matches task requirements to model capabilities.
+3. **Priority ordering.** Multiple models can share capabilities; the router picks the highest-priority available model.
+4. **Health-checked.** Models that fail health checks are automatically excluded from routing.
+
+---
+
+## 31. Testing Strategy
+
+### Testing Layers
+
+| Layer | Type | Tool | Coverage Target |
+|-------|------|------|----------------|
+| **Unit** | Individual functions | pytest | Tools, router, chunker, parsers |
+| **Integration** | Component interactions | pytest + test model server | Agent loop, RAG pipeline, doc gen |
+| **E2E** | Full workflow | pytest + Playwright | Complete demo workflows |
+| **Sovereignty** | Network verification | tcpdump + assertion script | Zero external connections |
+| **Performance** | Latency benchmarks | Custom + time measurement | Response time targets |
+
+### Critical Test Cases
+
+```python
+# test_sovereignty.py
+def test_no_external_connections():
+    """Verify zero bytes sent to external IPs during a full workflow."""
+    with network_capture() as capture:
+        run_full_inspection_workflow()
+    external_packets = [p for p in capture if not is_localhost(p.dest)]
+    assert len(external_packets) == 0
+
+# test_model_routing.py
+def test_routes_vision_for_image_input():
+    task = Task(prompt="Analyze this", attachments=[ImageFile("test.png")])
+    model = router.route(task)
+    assert "vision" in model.capabilities
+
+def test_routes_coding_for_code_request():
+    task = Task(prompt="Write a Python function to sort a list")
+    model = router.route(task)
+    assert "coding" in model.capabilities
+
+# test_agent_loop.py
+def test_agent_completes_within_max_steps():
+    result = agent.execute("Calculate 2+2")
+    assert result.state == AgentState.COMPLETED
+    assert result.total_steps <= agent.max_steps
+
+def test_agent_handles_tool_error():
+    # Mock a tool that raises an error
+    result = agent.execute("Read file /nonexistent/path")
+    assert result.state == AgentState.COMPLETED  # Agent should recover
+```
+
+---
+
+## 32. Failure Handling & Fallback Mechanisms
+
+| Failure | Detection | Fallback |
+|---------|-----------|----------|
+| **Model unavailable** | Health check fails | Route to next model with same capability; if none → error with clear message |
+| **Model returns garbage** | Output validation (no valid JSON for tool calls) | Retry up to 3 times with modified prompt; if still failing → return partial result |
+| **Tool execution error** | Exception caught | Log error, return error description to agent, let agent re-plan |
+| **Sandbox timeout** | 30s timer | Kill container, return timeout error to agent |
+| **RAG returns no results** | Empty result set | Agent proceeds without RAG context; notes "no relevant documents found" |
+| **OCR extraction fails** | Empty or garbled text | Fall back to vision model for direct interpretation |
+| **Document generation fails** | Template error | Return error with details; agent can retry with corrected data |
+| **Infinite agent loop** | Step counter > max_steps | Force termination, return partial results |
+| **VRAM exhaustion** | CUDA OOM error | Unload unused models, retry with smaller batch; if persists → error |
+| **Database connection lost** | Connection error | Retry with exponential backoff; queue audit logs in memory |
+
+### Circuit Breaker Pattern
+
+```python
+class ModelCircuitBreaker:
+    failure_threshold: int = 5
+    recovery_timeout: int = 60  # seconds
+    
+    def call(self, model_id: str, request):
+        if self.is_open(model_id):
+            raise ModelUnavailableError(f"{model_id} circuit breaker open")
+        try:
+            result = self.model_client.call(request)
+            self.record_success(model_id)
+            return result
+        except Exception as e:
+            self.record_failure(model_id)
+            raise
+```
+
+---
+
+## 33. Performance Considerations
+
+### Latency Targets
+
+| Operation | Target | Acceptable |
+|-----------|--------|-----------|
+| First token (reasoning) | <2s | <5s |
+| First token (coding) | <2s | <5s |
+| First token (vision) | <3s | <8s |
+| OCR (single page) | <3s | <10s |
+| RAG search | <500ms | <2s |
+| Document generation | <5s | <15s |
+| Model routing | <50ms | <200ms |
+| Complete inspection workflow | <60s | <120s |
+
+### Optimization Strategies
+
+1. **Model pre-loading:** Keep primary model in VRAM at all times. Pre-warm on startup.
+2. **Embedding caching:** Cache frequently-queried embeddings in Redis.
+3. **Async everything:** FastAPI's async + asyncio for all I/O operations.
+4. **Streaming responses:** Don't wait for full generation; stream tokens as they come.
+5. **Lazy tool loading:** Only import heavy tool dependencies when the tool is first used.
+6. **Document template caching:** Parse templates once, cache the parsed object.
+7. **Connection pooling:** PostgreSQL connection pool (asyncpg with pool size=20).
+8. **KV cache optimization:** Configure llama.cpp server's `--cache-reuse` / vLLM's prefix caching to retain KV cache between requests.
+
+---
+
+## 34. Deployment Strategy
+
+### Development
+
+```bash
+# Start all services
+docker compose -f docker-compose.dev.yml up
+
+# Backend hot-reload
+cd backend && uvicorn sage.main:app --reload
+
+# Frontend hot-reload
+cd frontend && npm run dev
+```
+
+### Production (Single Machine)
+
+```bash
+# Build images
+docker compose build
+
+# Start
+docker compose up -d
+
+# Verify
+docker compose ps
+sage-admin health-check
+sage-admin verify-airgap
+```
+
+### Docker Compose Architecture
+
+```yaml
+# docker-compose.yml
+services:
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    depends_on: [postgres, redis, model-server]
+    environment:
+      - DATABASE_URL=postgresql://sage:sage@postgres:5432/sage
+      - REDIS_URL=redis://redis:6379
+      - MODEL_SERVER_URL=http://model-server:8001
+      - AIRGAP_MODE=true
+    volumes:
+      - ./workspace:/workspace
+      - ./templates:/templates
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+    depends_on: [backend]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    volumes: [pgdata:/var/lib/postgresql/data]
+    environment:
+      - POSTGRES_DB=sage
+      - POSTGRES_USER=sage
+      - POSTGRES_PASSWORD=sage
+
+  redis:
+    image: redis:7-alpine
+    volumes: [redisdata:/data]
+
+  # For production, replace with vLLM:
+  #   image: vllm/vllm-openai:latest
+  #   command: --model /models/qwen3-8b --served-model-name qwen3-8b
+  model-server:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    ports: ["8001:8001"]
+    command: >
+      --model /models/qwen3-8b-Q4_K_M.gguf
+      --port 8001
+      --host 0.0.0.0
+      --ctx-size 8192
+      --n-gpu-layers 99
+    volumes:
+      - ./models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  pgdata:
+  redisdata:
+```
+
+---
+
+## 35. Sovereignty Proof
+
+### Three Layers of Proof
+
+#### Layer 1: Network Monitoring (Continuous)
+
+```python
+# audit/network_monitor.py
+class NetworkMonitor:
+    """Continuously monitors all network connections and logs them."""
+    
+    def start(self):
+        # Uses psutil to monitor all connections
+        for conn in psutil.net_connections():
+            if not self.is_local(conn.raddr):
+                self.alert(f"EXTERNAL CONNECTION DETECTED: {conn}")
+                self.log(conn, severity="CRITICAL")
+            else:
+                self.log(conn, severity="INFO")
+    
+    def is_local(self, addr):
+        return addr is None or addr.ip in ("127.0.0.1", "::1", "0.0.0.0")
+```
+
+#### Layer 2: Firewall Rules (Preventive)
+
+```bash
+# scripts/setup-firewall.sh
+# Block ALL outbound traffic except localhost
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -d 127.0.0.0/8 -j ACCEPT
+iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT    # Internal network
+iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT  # Docker network
+iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT # LAN
+iptables -A OUTPUT -j LOG --log-prefix "SAGE-BLOCKED: "
+iptables -A OUTPUT -j DROP
+```
+
+#### Layer 3: Verification Report (On-Demand)
+
+```
+========================================
+SAGE SOVEREIGNTY VERIFICATION REPORT
+========================================
+Date: 2026-08-26 15:01:33 IST
+Duration: 60 seconds
+Mode: AIR-GAP VERIFICATION
+
+NETWORK ANALYSIS:
+  Total packets captured: 1,247
+  Internal packets: 1,247
+  External packets: 0 ✅
+  Blocked connections: 0
+
+MODEL VERIFICATION:
+  qwen3:8b ............... LOCAL ✅ (sha256: abc123...)
+  qwen3-coder:8b ......... LOCAL ✅ (sha256: def456...)
+  qwen2.5-vl:7b ......... LOCAL ✅ (sha256: ghi789...)
+  nomic-embed-text ....... LOCAL ✅ (sha256: jkl012...)
+
+SERVICE VERIFICATION:
+  Model Server ........... localhost:8001 ✅
+  PostgreSQL ............. localhost:5432 ✅
+  Redis .................. localhost:6379 ✅
+  Backend ................ localhost:8000 ✅
+  Frontend ............... localhost:3000 ✅
+
+DNS VERIFICATION:
+  DNS queries made: 0 ✅
+
+VERDICT: ✅ SOVEREIGN — No external data transmission detected.
+========================================
+```
+
+---
+
+## 36. Architectural Mistakes to Avoid
+
+> [!WARNING]
+> These are common pitfalls that kill SIH projects and real-world sovereign AI deployments.
+
+| # | Mistake | Why It's Deadly | What To Do Instead |
+|---|---------|----------------|-------------------|
+| 1 | **Using LangChain for everything** | Massive dependency tree, telemetry phone-home, slow, abstracts away understanding | Build a lightweight custom agent loop (~500 lines). You'll understand every line. |
+| 2 | **Treating RAG as "just embed and search"** | Industrial documents have structure (tables, cross-refs). Naive chunking destroys it. | Invest in structured document parsing. Use layout-aware chunkers. |
+| 3 | **Single model assumption** | "We'll use Llama 3 for everything" → fails at vision, fails at code, stuck when better models emerge. | Model registry + router from day one. Abstract the model behind an interface. |
+| 4 | **Ignoring model cold-load time** | Judges tap their feet for 30 seconds during demo. | Pre-warm all models before demo. Start model server processes at boot. |
+| 5 | **Building a chatbot and calling it an agent** | Judges and MRPL reviewers will see through this immediately. | Show multi-step execution, tool calls, error recovery, and deliverable output. |
+| 6 | **Over-engineering for production** | Kubernetes, Istio, Kafka — for a 3-person team's SIH submission. | Docker Compose. One machine. Modular monolith. Scale later. |
+| 7 | **Ignoring the "proof" requirement** | Claiming "it's local" without evidence. | Network monitor, audit logs, and sovereignty report are **mandatory** demo components. |
+| 8 | **Not handling LLM failures gracefully** | Model returns malformed JSON → entire workflow crashes → demo fails. | Validate every LLM output. Retry with modified prompts. Fallback to simpler approaches. |
+| 9 | **Hardcoding prompts** | Different models need different prompt formats. | Prompt templates per model family in config, not in code. |
+| 10 | **Embedding external CLI agents as runtime dependencies** | Fragile integration, loss of control, conflicting model management. | Build native coding agent within SAGE's agent engine. |
+| 11 | **Using ChromaDB in production** | No ACID, no relational queries, another process to manage. | pgvector — one DB for everything. |
+| 12 | **Skipping structured output validation** | Agent generates a document with missing fields → broken Word file. | Pydantic validation between LLM output and document generation. Always. |
+
+---
+
+## 37. Architecture Diagrams
+
+### A. High-Level Architecture Diagram
+
+```
+┌─────────────────────────────── SAGE SYSTEM ────────────────────────────────┐
+│                                                                             │
+│   ┌─────────────┐         ┌──────────────────────────────────────────┐     │
+│   │             │  HTTPS  │              SAGE BACKEND                │     │
+│   │   Web UI    │◄───────►│                                          │     │
+│   │  (Next.js)  │   WS    │   ┌──────────┐    ┌─────────────────┐   │     │
+│   │             │         │   │ API Layer │───►│  Agent Engine    │   │     │
+│   └─────────────┘         │   └──────────┘    │  ┌───────────┐  │   │     │
+│                            │                   │  │  Planner  │  │   │     │
+│                            │                   │  │  Executor │  │   │     │
+│                            │                   │  │  Reflector│  │   │     │
+│                            │                   │  └───────────┘  │   │     │
+│                            │                   └────────┬────────┘   │     │
+│                            │                            │            │     │
+│                            │              ┌─────────────┼─────────┐  │     │
+│                            │              │             │         │  │     │
+│                            │         ┌────▼────┐  ┌─────▼────┐ ┌─▼──▼─┐  │
+│                            │         │  Model  │  │   Tool   │ │ Doc  │  │
+│                            │         │  Router │  │ Registry │ │ Gen  │  │
+│                            │         └────┬────┘  └────┬─────┘ └──┬──┘  │
+│                            │              │            │          │     │
+│                            └──────────────┼────────────┼──────────┼─────┘
+│                                           │            │          │
+│   ┌───────────────────────────────────────┼────────────┼──────────┼─────┐
+│   │            INFERENCE LAYER            │            │          │     │
+│   │   ┌──────────────┐ ┌──────────────┐  │            │          │     │
+│   │   │  llama.cpp /  │ │  llama.cpp / │  │            │          │     │
+│   │   │  vLLM         │ │  vLLM        │◄─┘            │          │     │
+│   │   │  (Reasoning)  │ │  (Vision)    │               │          │     │
+│   │   └──────────────┘ └──────────────┘               │          │     │
+│   └────────────────────────────────────────────────────┘          │     │
+│                                                                    │     │
+│   ┌───────────────────────────────────────────────────────────────┐│     │
+│   │            DATA LAYER                                         ││     │
+│   │   ┌──────────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ ││     │
+│   │   │ PostgreSQL   │ │  Redis   │ │  File    │ │  Sandbox   │ ││     │
+│   │   │ + pgvector   │ │  Cache   │ │  System  │ │  (Docker)  │◄┘│     │
+│   │   └──────────────┘ └──────────┘ └──────────┘ └────────────┘  │     │
+│   └───────────────────────────────────────────────────────────────┘     │
+│                                                                         │
+│   ┌───────────────────────────────────────────────────────────────┐     │
+│   │   SECURITY LAYER:  Firewall │ Network Monitor │ Audit Logger  │     │
+│   └───────────────────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### B. Detailed Component Interaction Diagram
+
+```mermaid
+sequenceDiagram
+    participant U as User (Browser)
+    participant API as SAGE API
+    participant AE as Agent Engine
+    participant MR as Model Router
+    participant MS as Model Server
+    participant TR as Tool Registry
+    participant RAG as RAG Engine
+    participant DG as Doc Generator
+    participant AU as Audit Logger
+
+    U->>API: POST /chat/message (+ file upload)
+    API->>AU: Log: user_request
+    API->>AE: Execute task
+    
+    AE->>MR: Route task
+    MR-->>AE: Selected model: vision (has image)
+    AE->>AU: Log: model_selected
+    
+    Note over AE: PLAN phase
+    AE->>MS: Generate plan (reasoning model)
+    MS-->>AE: Plan: [OCR, RAG search, analyze, generate doc]
+    
+    Note over AE: ACT phase (Step 1: OCR)
+    AE->>TR: Execute: ocr_extract(file)
+    TR-->>AE: OCR text result
+    AE->>AU: Log: tool_call(ocr)
+    
+    Note over AE: ACT phase (Step 2: RAG)
+    AE->>TR: Execute: rag_search(query)
+    TR->>RAG: Hybrid search
+    RAG-->>TR: Top-5 chunks with sources
+    TR-->>AE: Search results
+    AE->>AU: Log: tool_call(rag)
+    
+    Note over AE: ACT phase (Step 3: Analyze)
+    AE->>MS: Generate analysis (reasoning model)
+    MS-->>AE: Structured findings
+    AE->>AU: Log: model_inference
+    
+    Note over AE: ACT phase (Step 4: Generate Doc)
+    AE->>TR: Execute: generate_word(data)
+    TR->>DG: Render template
+    DG-->>TR: Word file path
+    TR-->>AE: Document ready
+    AE->>AU: Log: tool_call(doc_gen)
+    
+    AE-->>API: Task complete + file path
+    API-->>U: Stream result + download link
+```
+
+### C. End-to-End Data Flow Diagram
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        DATA FLOW — ALL LOCAL                              │
+│                                                                           │
+│  INPUT                    PROCESSING                      OUTPUT          │
+│  ─────                    ──────────                      ──────          │
+│                                                                           │
+│  ┌──────────┐    ┌─────────────┐    ┌──────────────┐    ┌──────────┐    │
+│  │ User     │───►│ API Gateway │───►│ Agent Engine │───►│ Word Doc │    │
+│  │ Upload   │    │ (validate,  │    │ (plan, act,  │    │ PPTX     │    │
+│  │ (PDF,    │    │  auth,      │    │  observe,    │    │ XLSX     │    │
+│  │  image,  │    │  log)       │    │  reflect)    │    │ Code     │    │
+│  │  text)   │    └──────┬──────┘    └──────┬───────┘    │ Report   │    │
+│  └──────────┘           │                  │            └──────────┘    │
+│                          │                  │                            │
+│                          ▼                  ▼                            │
+│              ┌──────────────────────────────────────────┐               │
+│              │           LOCAL SERVICES ONLY             │               │
+│              │                                           │               │
+│              │  Model Server ─ localhost:8001            │               │
+│              │  PostgreSQL ─ localhost:5432              │               │
+│              │  Redis ───── localhost:6379               │               │
+│              │  Tesseract ── local process               │               │
+│              │  Docker ──── unix socket                  │               │
+│              │                                           │               │
+│              │  ❌ NO EXTERNAL CONNECTIONS               │               │
+│              └──────────────────────────────────────────┘               │
+│                                                                           │
+│  ┌──────────────────────────────────────────────────────────────────┐    │
+│  │  AUDIT TRAIL: Every arrow above is logged with timestamp,       │    │
+│  │  user_id, operation, input hash, output hash, latency.          │    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 38. Risks & Mitigations
+
+| # | Risk | Probability | Impact | Mitigation |
+|---|------|-------------|--------|------------|
+| 1 | **Models too large for demo GPU** | Medium | CRITICAL | Use Q4_K_M quantization. Test on target hardware early. Have fallback to smaller models (Phi-4-mini). |
+| 2 | **Model quality insufficient for agentic tool-calling** | Medium | HIGH | Test tool-calling extensively with chosen models. Qwen3 has strong tool-calling support. Use structured output enforcement. |
+| 3 | **OCR quality poor on real industrial documents** | Medium | HIGH | Use PaddleOCR for complex layouts. Supplement with vision LLM. Pre-process images (deskew, denoise). |
+| 4 | **RAG retrieval returns irrelevant results** | Medium | MEDIUM | Hybrid search (vector + BM25). Structured chunking with metadata. Manual evaluation of retrieval quality. |
+| 5 | **Demo fails live** | Low | CRITICAL | Have pre-recorded backup. Pre-warm all models. Run demo 10+ times in rehearsal. |
+| 6 | **Agent gets stuck in infinite loop** | Medium | MEDIUM | Hard step limit (15). Timeout per step (60s). Circuit breaker on model failures. |
+| 7 | **Judges question sovereignty claim** | Low | HIGH | Three-layer proof: network monitor + firewall + verification report. Show tcpdump output live. |
+| 8 | **Team burns out on scope** | High | HIGH | Strict MVP scope. Build foundation first. Add features incrementally. Resist feature creep. |
+| 9 | **Docker/GPU issues on demo machine** | Medium | HIGH | Test on the exact demo hardware. Have a backup machine. Pre-build all Docker images. |
+| 10 | **Model hallucinations in generated documents** | High | MEDIUM | Always include source attributions. Pydantic validation. Human-in-the-loop for production (not demo). |
+
+---
+
+## Summary: Build vs Integrate vs Avoid
+
+| Component | Build | Integrate | Avoid |
+|-----------|-------|-----------|-------|
+| Agent orchestration loop | ✅ Custom | | LangChain/LangGraph (too heavy) |
+| Model serving | | ✅ vLLM / llama.cpp server | Rolling your own inference |
+| Model routing | ✅ Custom classifier | | LLM-based routing |
+| Tool framework | ✅ Custom (simple) | | Heavy plugin frameworks |
+| RAG pipeline | ✅ Custom ingestion/retrieval | ✅ pgvector, sentence-transformers | Managed RAG services |
+| OCR | | ✅ Tesseract + PaddleOCR | Cloud OCR APIs |
+| Vision understanding | | ✅ Qwen2.5-VL via model server | External vision APIs |
+| Document generation | | ✅ python-docx-template, python-pptx, openpyxl | LibreOffice server (complex) |
+| Code sandbox | | ✅ Docker | Unsandboxed `exec()` |
+| Authentication | ✅ Simple JWT | | Keycloak (overkill for MVP) |
+| Frontend | ✅ Custom Next.js | | Generic chat UI libraries |
+| Database | | ✅ PostgreSQL + pgvector | MongoDB, multiple DBs |
+| Coding agent | ✅ Custom agent profile | | External CLI tools as runtime dependency |
+| Network monitoring | ✅ Custom (psutil + tcpdump) | | Expensive SIEM tools |
+
+---
+
+## Proposed Changes
+
+### Phase 1 (Foundation + Agent Core)
+
+#### [NEW] `docker-compose.yml` — Single-command deployment
+#### [NEW] `backend/sage/main.py` — FastAPI entry point
+#### [NEW] `backend/sage/agent/engine.py` — ReAct agent loop
+#### [NEW] `backend/sage/agent/router.py` — Model routing logic
+#### [NEW] `backend/sage/models/client.py` — Model server client abstraction (OpenAI-compatible)
+#### [NEW] `backend/sage/models/registry.py` — Model registry
+#### [NEW] `backend/sage/tools/base.py` — Tool base class + registry
+#### [NEW] `backend/sage/tools/file_ops.py` — File I/O tools
+#### [NEW] `backend/sage/api/chat.py` — Chat API + WebSocket
+#### [NEW] `backend/sage/auth/service.py` — JWT auth
+#### [NEW] `backend/sage/audit/logger.py` — Structured audit logger
+#### [NEW] `backend/sage/config.py` — Configuration management
+#### [NEW] `config/model_registry.yaml` — Model definitions
+#### [NEW] `frontend/app/` — Next.js application scaffold
+#### [NEW] `frontend/components/ChatWindow.tsx` — Main chat interface
+
+### Phase 2 (RAG + Multimodal)
+
+#### [NEW] `backend/sage/rag/` — Full RAG pipeline
+#### [NEW] `backend/sage/multimodal/` — OCR + vision processing
+#### [NEW] `backend/sage/tools/rag_search.py` — RAG search tool
+#### [NEW] `backend/sage/tools/ocr.py` — OCR tool
+#### [NEW] `backend/sage/tools/vision.py` — Vision analysis tool
+
+### Phase 3 (Doc Gen + Coding Agent)
+
+#### [NEW] `backend/sage/docgen/` — Document generation pipeline
+#### [NEW] `backend/sage/sandbox/` — Code execution sandbox
+#### [NEW] `backend/sage/agent/profiles/` — Agent profiles
+#### [NEW] `templates/` — Document templates (.docx, .pptx)
+
+### Phase 4 (Sovereignty + Polish)
+
+#### [NEW] `backend/sage/audit/network_monitor.py` — Network monitoring
+#### [NEW] `scripts/verify-sovereignty.sh` — Verification script
+#### [NEW] `scripts/airgap-bundle.sh` — Air-gap deployment bundler
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- `pytest backend/tests/` — Unit and integration tests
+- `pytest backend/tests/test_sovereignty.py` — Network verification tests
+- `npm test` in frontend — Component tests
+
+### Manual Verification
+- Run full inspection workflow end-to-end
+- Run coding workflow end-to-end
+- Run `sage-admin verify-airgap` on target hardware
+- Demo rehearsal (3+ complete run-throughs)
+- Test on exact SIH demo hardware
