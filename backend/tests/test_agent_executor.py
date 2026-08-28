@@ -26,6 +26,8 @@ models:
         p = pathlib.Path(self.temp_dir.name) / "model_registry.yaml"
         p.write_text(yaml_content)
         registry = ModelRegistry(str(p))
+        for model in registry.models.values():
+            model.status = "READY"
         router = ModelRouter(registry)
         tools = create_default_tool_registry()
         profiles = ProfileManager()

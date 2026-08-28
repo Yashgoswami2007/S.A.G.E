@@ -1,5 +1,4 @@
 import asyncio
-import subprocess
 from sage.tools.base import BaseTool, ToolPermission, ToolResult
 from sage.config import settings
 

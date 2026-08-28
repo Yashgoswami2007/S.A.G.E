@@ -1,5 +1,3 @@
-import os
-import glob
 import json
 import aiofiles
 from pathlib import Path

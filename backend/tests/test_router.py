@@ -39,6 +39,8 @@ models:
         p = pathlib.Path(self.temp_dir.name) / "model_registry.yaml"
         p.write_text(yaml_content)
         self.registry = ModelRegistry(str(p))
+        for model in self.registry.models.values():
+            model.status = "READY"
         self.router = ModelRouter(self.registry)
 
     def tearDown(self):

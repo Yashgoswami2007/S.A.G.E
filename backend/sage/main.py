@@ -5,14 +5,20 @@ from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings
 from sage.auth.middleware import AuthMiddleware
 from sage.api import health, auth, admin, chat, tasks
+from sage.models.lifecycle import ModelLifecycleManager
 
 logger = logging.getLogger("sage")
 
+# Initialize ModelLifecycleManager using the globally accessible model_registry from chat router
+lifecycle_manager = ModelLifecycleManager(chat.model_registry)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting SAGE backend (Phase 1 Agent Core active)...")
+    logger.info("Starting SAGE backend (Phase 2a Model Serving active)...")
+    await lifecycle_manager.start_all()
     yield
     logger.info("Shutting down SAGE backend...")
+    await lifecycle_manager.stop_all()
 
 app = FastAPI(
     title="SAGE - Sovereign On-Premise Agentic AI Workbench",

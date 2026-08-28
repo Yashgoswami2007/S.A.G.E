@@ -1,4 +1,3 @@
-import re
 from typing import Tuple, Optional, List
 from sage.models.registry import ModelRegistry, ModelConfig
 
@@ -27,36 +26,42 @@ class ModelRouter:
 
         # 1. Profile Preference
         if profile_name == "coder":
-            coder_model = self.registry.get_by_capability("coding")
+            coder_model = self.registry.get_ready_by_capability("coding")
             if coder_model:
                 return coder_model, "coder profile requested -> selected coding model"
 
         if profile_name == "inspector":
-            vision_model = self.registry.get_by_capability("vision")
+            vision_model = self.registry.get_ready_by_capability("vision")
             if vision_model:
                 return vision_model, "inspector profile requested -> selected vision model"
 
         # 2. Input Modality Detection
         image_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
         if any(f.lower().endswith(image_extensions) for f in file_attachments) or "image" in prompt_lower or "photo" in prompt_lower or "diagram" in prompt_lower:
-            vision_model = self.registry.get_by_capability("vision")
+            vision_model = self.registry.get_ready_by_capability("vision")
             if vision_model:
                 return vision_model, "image modality detected -> selected vision model"
 
         # 3. Keyword / Heuristic Classification
         coding_keywords = ["code", "python", "function", "script", "refactor", "bug", "syntax", "patch", "class", "def "]
         if any(kw in prompt_lower for kw in coding_keywords):
-            coder_model = self.registry.get_by_capability("coding")
+            coder_model = self.registry.get_ready_by_capability("coding")
             if coder_model:
                 return coder_model, "coding keywords detected in prompt -> selected coding model"
 
         # 4. Fallback Default
         default_model = self.registry.get_default()
         if not default_model:
-            # Fallback to any model in registry
+            # Fallback to any READY model in registry
+            all_ready = [m for m in self.registry.list_all() if m.status == "READY"]
+            if all_ready:
+                return all_ready[0], "fallback to first available ready model"
+            
+            # If nothing is ready, fallback to whatever is registered just in case 
+            # it's a mock/test mode without the lifecycle manager running
             all_models = self.registry.list_all()
             if all_models:
-                return all_models[0], "fallback to first available model"
+                return all_models[0], "fallback to first registered model (none are marked READY)"
             # Hardcoded fallback config if registry empty
             return ModelConfig(
                 id="qwen3-8b",

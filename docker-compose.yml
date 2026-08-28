@@ -18,6 +18,7 @@ services:
       - ./workspace:/workspace
       - ./templates:/templates
       - ./config:/app/config
+      - ./models:/models
 
   postgres:
     image: pgvector/pgvector:pg16
