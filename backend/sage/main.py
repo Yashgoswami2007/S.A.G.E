@@ -7,10 +7,12 @@ from sage.auth.middleware import AuthMiddleware
 from sage.api import health, auth, admin, chat, tasks
 from sage.models.lifecycle import ModelLifecycleManager
 
+from sage.models.registry import ModelRegistry
+
 logger = logging.getLogger("sage")
 
-# Initialize ModelLifecycleManager using the globally accessible model_registry from chat router
-lifecycle_manager = ModelLifecycleManager(chat.model_registry)
+# Initialize ModelLifecycleManager with its own registry instance
+lifecycle_manager = ModelLifecycleManager(ModelRegistry(settings.MODEL_REGISTRY_PATH))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
