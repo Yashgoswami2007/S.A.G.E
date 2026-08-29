@@ -41,6 +41,15 @@ models:
             from sage.config import settings
             settings.WORKSPACE_DIR = self.temp_dir.name
             (pathlib.Path(self.temp_dir.name) / "sample.txt").write_text("demo file")
+            
+            # Mock planner to return a plan that lists the directory
+            async def mock_plan(*args, **kwargs):
+                from sage.agent.schemas import Plan, Step
+                return Plan(
+                    summary="List files",
+                    steps=[Step(step_id=1, description="List files", tool_name="list_dir", tool_args={"path": "."})]
+                )
+            self.executor.planner.create_plan = mock_plan
 
             resp = await self.executor.run(
                 prompt="List the files in my workspace",

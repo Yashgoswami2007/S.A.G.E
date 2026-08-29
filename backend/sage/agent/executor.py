@@ -19,12 +19,14 @@ class ReActExecutor:
         router: ModelRouter,
         tool_registry: ToolRegistry,
         profile_manager: ProfileManager,
+        lifecycle_manager=None,
         max_steps: int = 15,
         max_retries_per_step: int = 3
     ):
         self.router = router
         self.tool_registry = tool_registry
         self.profile_manager = profile_manager
+        self.lifecycle_manager = lifecycle_manager
         self.planner = Planner()
         self.max_steps = max_steps
         self.max_retries_per_step = max_retries_per_step
@@ -47,6 +49,22 @@ class ReActExecutor:
             profile_name=profile.name,
             file_attachments=file_attachments
         )
+
+        # 1b. VRAM Swap — if the router returned [needs_swap], trigger model swap
+        if "[needs_swap]" in routing_reason and self.lifecycle_manager:
+            # Find what's currently loaded so we can unload it
+            currently_loaded = [
+                m for m in self.router.registry.list_all()
+                if m.status == "READY" and m.id != model_config.id
+            ]
+            if currently_loaded:
+                await self.lifecycle_manager.swap_model(
+                    load_id=model_config.id,
+                    unload_id=currently_loaded[0].id
+                )
+            else:
+                await self.lifecycle_manager.start_model(model_config.id)
+            routing_reason = routing_reason.replace(" [needs_swap]", " [swapped]")
 
         client = OpenAICompatibleClient(base_url=f"http://localhost:{model_config.server_port}")
 
@@ -194,12 +212,34 @@ class ReActExecutor:
             else:
                 # LLM Direct Response step
                 messages = [
-                    {"role": "system", "content": f"You are a helpful assistant operating under profile '{profile.name}'."},
-                    {"role": "user", "content": prompt}
+                    {"role": "system", "content": f"You are a helpful assistant operating under profile '{profile.name}'."}
                 ]
-                llm_resp = await client.chat(model=model_config.id, messages=messages)
-                choices = llm_resp.get("choices", [{}])
-                final_output = choices[0].get("message", {}).get("content", "No output generated.")
+                messages.append({"role": "user", "content": prompt})
+                
+                # Append tool observation history for context
+                for evt in trace.events:
+                    if evt.agent_state == AgentState.OBSERVING and evt.tool_result:
+                        msg_str = f"Observation from {evt.tool_name}: {evt.tool_result[:500]}"
+                        messages.append({"role": "user", "content": msg_str})
+
+                if stream_callback:
+                    final_output = ""
+                    async for token in client.chat_stream(model=model_config.id, messages=messages):
+                        final_output += token
+                        # Stream token wrapped in a TraceEvent
+                        token_event = TraceEvent(
+                            task_id=task_id,
+                            step_id=step.step_id,
+                            agent_state=AgentState.OBSERVING,
+                            profile=profile.name,
+                            selected_model=model_config.id,
+                            reflection=token  # using reflection field to carry the token
+                        )
+                        await stream_callback(token_event)
+                else:
+                    llm_resp = await client.chat(model=model_config.id, messages=messages)
+                    choices = llm_resp.get("choices", [{}])
+                    final_output = choices[0].get("message", {}).get("content", "No output generated.")
                 
                 duration_ms = (time.time() - start_time) * 1000.0
                 obs_event = TraceEvent(

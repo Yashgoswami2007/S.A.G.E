@@ -21,6 +21,7 @@ models:
     priority: 1
     min_vram_gb: 1
     context_length: 2048
+    auto_start: true
   - id: test-model-2
     name: Test Model 2
     model_path: {valid_path}
@@ -29,6 +30,7 @@ models:
     priority: 1
     min_vram_gb: 1
     context_length: 2048
+    auto_start: true
 """
         self.valid_file_path = pathlib.Path(self.temp_dir.name) / "dummy.gguf"
         self.valid_file_path.write_text("dummy")

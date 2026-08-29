@@ -9,7 +9,7 @@ description = "Sovereign On-Premise Agentic AI Workbench (SAGE)"
 authors = [
     {name = "MRPL Team"}
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",

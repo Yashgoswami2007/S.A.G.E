@@ -8,34 +8,37 @@
 
 ## 6. Model-Serving Architecture
 
-### Architecture: Multi-Instance Model Servers
+### Architecture: Multi-Instance Model Servers (VRAM-Swap Strategy)
 
 ```
-┌─────────────────────────────────────────┐
-│            Model Registry               │
-│  ┌─────────────────────────────────┐    │
-│  │  model_id: qwen3-8b            │    │
-│  │  server:   localhost:8001       │    │
-│  │  type:     reasoning           │    │
-│  │  vram:     ~6GB (Q4_K_M)       │    │
-│  ├─────────────────────────────────┤    │
-│  │  model_id: qwen3-coder-8b      │    │
-│  │  server:   localhost:8002       │    │
-│  │  type:     coding              │    │
-│  ├─────────────────────────────────┤    │
-│  │  model_id: qwen2.5-vl-7b       │    │
-│  │  server:   localhost:8003       │    │
-│  │  type:     vision              │    │
-│  └─────────────────────────────────┘    │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│              Model Registry (2-Model Stack)       │
+│  ┌────────────────────────────────────────────┐  │
+│  │  model_id: qwen3-8b                        │  │
+│  │  server:   localhost:8001                   │  │
+│  │  type:     reasoning, general               │  │
+│  │  vram:     ~5GB (Q4_K_M)                    │  │
+│  │  status:   AUTO-START (primary)             │  │
+│  ├────────────────────────────────────────────┤  │
+│  │  model_id: gemma-4-12b                      │  │
+│  │  server:   localhost:8002                   │  │
+│  │  type:     coding, vision                    │  │
+│  │  vram:     ~7.5GB (Q4_K_M)                  │  │
+│  │  status:   ON-DEMAND (swapped in when needed)│  │
+│  └────────────────────────────────────────────┘  │
+│                                                  │
+│  Hardware: RTX 5060 (8GB VRAM)                   │
+│  Strategy: Only ONE model loaded at a time.      │
+│  Router detects [needs_swap] → Lifecycle swaps.  │
+└──────────────────────────────────────────────────┘
 ```
 
 ### Multi-Model Serving Strategy
 
-For workflows that need both reasoning + vision (inspection workflow), we need both models ready simultaneously.
+For an 8GB VRAM GPU (RTX 5060), only one model can be loaded at a time. The router intelligently detects which model is needed and the executor triggers a VRAM swap via the lifecycle manager.
 
 **Strategy:**
-- **SIH Demo (single GPU, 16-24GB VRAM):** Run llama.cpp server instances. Keep the primary reasoning model hot-loaded; start vision/coding model servers on-demand (~5s startup with pre-loaded GGUF files).
+- **SIH Demo (single GPU, 8GB VRAM):** Qwen3-8B hot-loaded as primary. When a coding/vision task is detected, the lifecycle manager unloads Qwen3 and loads Gemma 4 12B (~5s swap time). After the task completes, the system can swap back.
 - **Production (multi-GPU):** Use vLLM with multi-model serving, each model pinned to a GPU. Zero swap latency. Continuous batching for concurrent users.
 
 ### Model Lifecycle

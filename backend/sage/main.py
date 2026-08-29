@@ -23,9 +23,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SAGE - Sovereign On-Premise Agentic AI Workbench",
     version="0.2.0",
-    description="Backend API for SAGE Phase 1 (Agent Core)",
+    description="Backend API for SAGE Phase 2",
     lifespan=lifespan
 )
+app.state.lifecycle_manager = lifecycle_manager
 
 # CORS
 app.add_middleware(
