@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from sage_cli.config import config, save_config
+from sage_cli.config import config
 
 app = typer.Typer(
     name="sage",
@@ -50,21 +50,8 @@ def health():
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
 
-@app.command()
-def login(username: str):
-    """Authenticate with the SAGE backend."""
-    password = typer.prompt("Password", hide_input=True)
-    try:
-        response = httpx.post(f"{config.backend_url}/api/auth/login", json={"username": username, "password": password})
-        if response.status_code == 200:
-            data = response.json()
-            config.token = data.get("access_token")
-            save_config(config)
-            console.print("[bold green]Successfully logged in![/bold green]")
-        else:
-            console.print(f"[bold red]Login failed:[/bold red] {response.text}")
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+# NOTE: login command removed — SAGE is offline-focused and does not require
+# authentication.  Re-add when JWT auth is re-enabled in the backend.
 
 @app.command()
 def ask(

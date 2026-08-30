@@ -1,5 +1,13 @@
+import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
+
+# Windows requires ProactorEventLoop to support asyncio subprocesses.
+# SelectorEventLoop (the default on Windows) raises NotImplementedError
+# when asyncio.create_subprocess_exec is called.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings

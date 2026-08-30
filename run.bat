@@ -113,7 +113,8 @@ if %errorlevel% equ 0 (
 
 :: ── 7. Launch backend in a separate window ───────────
 echo [6/6] Launching SAGE backend on http://localhost:8000 ...
-start "SAGE Backend" cmd /k "call "%ROOT%\.venv\Scripts\activate.bat" && cd /d "%ROOT%\backend" && uvicorn sage.main:app --host 0.0.0.0 --port 8000 --reload"
+echo       ^(qwen3-8b will auto-start; if it fails gemma-4-12b activates as fallback^)
+start "SAGE Backend" cmd /k "call "%ROOT%\.venv\Scripts\activate.bat" && cd /d "%ROOT%\backend" && uvicorn sage.main:app --host 0.0.0.0 --port 8000 --reload --loop asyncio"
 
 :: ── 8. Wait for backend to accept connections ─────────
 echo.
@@ -141,13 +142,13 @@ echo  Backend : http://localhost:8000
 echo  API docs: http://localhost:8000/docs
 echo.
 echo  Model stack ^(RTX 5060 / 8 GB VRAM^):
-echo    [PRIMARY]   Qwen3-8B       ^(~6 GB^) - reasoning/general  - always hot
-echo    [SPECIALIST] Gemma 4 12B   ^(~8 GB^) - coding/vision      - swapped on demand
+echo    [PRIMARY]    Qwen3-8B       ^(~6 GB^) - reasoning/general  - auto-starts
+echo    [FALLBACK]   Gemma 4 12B   ^(~8 GB^) - coding/vision/general - auto-activates if Qwen3 fails
 echo    ^(Only ONE model loaded at a time - router swaps automatically^)
+echo    ^(If Qwen3-8B fails to load or crashes, Gemma-4-12B is activated automatically^)
 echo.
 echo  CLI commands:
 echo    sage health                           - check backend + model status
-echo    sage login ^<username^>                 - authenticate
 echo    sage ask "your prompt"               - run an agent task ^(auto-routes^)
 echo    sage ask "..." --profile coder       - force coding profile ^(Gemma 4^)
 echo    sage ask "..." --profile analyst     - analysis profile ^(Qwen3^)
