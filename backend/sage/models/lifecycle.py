@@ -1,11 +1,31 @@
 import asyncio
 import os
+import shutil
 import httpx
 import structlog
 from typing import Dict, List, Optional
 from sage.models.registry import ModelRegistry, ModelConfig
 
 logger = structlog.get_logger(__name__)
+
+# Resolve the llama-server binary path once at import time.
+# Checks PATH first; if not found, falls back to the known Windows install location.
+_LLAMA_SERVER_FALLBACK = r"C:\llama-b10679-bin-win-cuda-13.3-x64\llama-server.exe"
+
+def _resolve_llama_server() -> str:
+    """Return the absolute path to llama-server, searching PATH then known fallbacks."""
+    found = shutil.which("llama-server")
+    if found:
+        return found
+    if os.path.isfile(_LLAMA_SERVER_FALLBACK):
+        logger.info(f"llama-server not on PATH; using fallback: {_LLAMA_SERVER_FALLBACK}")
+        return _LLAMA_SERVER_FALLBACK
+    raise FileNotFoundError(
+        "llama-server not found on PATH and fallback path does not exist. "
+        f"Add it to PATH or install it at {_LLAMA_SERVER_FALLBACK}"
+    )
+
+_LLAMA_SERVER_BIN: Optional[str] = None
 
 class ModelLifecycleManager:
     """Manages the startup, health tracking, and shutdown of local model server processes."""
@@ -36,8 +56,16 @@ class ModelLifecycleManager:
         logger.info(f"Starting {model.server_type} for model: {model.id} on port {model.server_port}")
         
         if model.server_type == "llama-server":
+            global _LLAMA_SERVER_BIN
+            if _LLAMA_SERVER_BIN is None:
+                try:
+                    _LLAMA_SERVER_BIN = _resolve_llama_server()
+                except FileNotFoundError as e:
+                    logger.error(str(e))
+                    model.status = "UNAVAILABLE"
+                    return
             cmd = [
-                "llama-server",
+                _LLAMA_SERVER_BIN,
                 "-m", model.model_path,
                 "--port", str(model.server_port),
                 "-c", str(model.context_length),
@@ -70,7 +98,11 @@ class ModelLifecycleManager:
             self._health_tasks[model.id] = task
             
         except Exception as e:
-            logger.error(f"Failed to start server for {model.id}: {e}")
+            import traceback
+            logger.error(
+                f"Failed to start server for {model.id}: {type(e).__name__}: {e}\n"
+                + traceback.format_exc()
+            )
             model.status = "UNAVAILABLE"
             
     async def _health_check_loop(self, model: ModelConfig):

@@ -3,6 +3,11 @@ import os
 from pydantic import BaseModel
 from typing import List, Optional
 
+# Project root: registry.py lives at backend/sage/models/registry.py
+# so root is 3 levels up
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", ".."))
+
 class ModelConfig(BaseModel):
     id: str
     name: str
@@ -24,7 +29,6 @@ class ModelRegistry:
         
     def _load_registry(self, path: str):
         if not os.path.exists(path):
-            # In a real environment we might want to log a warning here
             return
         with open(path, "r") as f:
             data = yaml.safe_load(f)
@@ -32,6 +36,12 @@ class ModelRegistry:
         if data and "models" in data:
             for m in data["models"]:
                 model_config = ModelConfig(**m)
+                # Resolve relative model_path to absolute using project root
+                # so llama-server can be launched from any working directory
+                if not os.path.isabs(model_config.model_path):
+                    model_config.model_path = os.path.normpath(
+                        os.path.join(_PROJECT_ROOT, model_config.model_path)
+                    )
                 self.models[model_config.id] = model_config
                 
     def get_by_capability(self, capability: str) -> Optional[ModelConfig]:

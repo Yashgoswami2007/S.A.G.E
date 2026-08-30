@@ -16,7 +16,7 @@ class OpenAICompatibleClient:
         messages: list[dict],
         tools: Optional[list] = None,
         temperature: float = 0.2,
-        max_tokens: int = 2048,
+        max_tokens: int = 4096,  # increased: Qwen3 needs room for <think> + answer
         stream: bool = False
     ) -> dict[str, Any]:
         """
@@ -58,7 +58,7 @@ class OpenAICompatibleClient:
         messages: list[dict],
         tools: Optional[list] = None,
         temperature: float = 0.2,
-        max_tokens: int = 2048
+        max_tokens: int = 4096  # increased: Qwen3 needs room for <think> + answer
     ) -> AsyncGenerator[str, None]:
         """
         Streams responses from the OpenAI-compatible /v1/chat/completions endpoint.

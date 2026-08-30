@@ -1,3 +1,5 @@
+import os
+import re
 import time
 import json
 from typing import Callable, Optional, Awaitable, Any
@@ -67,6 +69,10 @@ class ReActExecutor:
             routing_reason = routing_reason.replace(" [needs_swap]", " [swapped]")
 
         client = OpenAICompatibleClient(base_url=f"http://localhost:{model_config.server_port}")
+        # llama-server uses the model file path as the model ID in API calls,
+        # not the registry short-name (e.g. "qwen3-8b").
+        # Use model_path when it is an actual file path, fall back to id otherwise.
+        llm_model_id = model_config.model_path if os.path.isabs(model_config.model_path) else model_config.id
 
         # Initialize persistent trace
         trace = ExecutionTrace(
@@ -93,7 +99,7 @@ class ReActExecutor:
         )
         await emit(plan_event)
 
-        plan: Plan = await self.planner.create_plan(prompt, profile, client, model_config.id)
+        plan: Plan = await self.planner.create_plan(prompt, profile, client, llm_model_id)
         
         final_output = ""
         current_step_idx = 0
@@ -224,9 +230,8 @@ class ReActExecutor:
 
                 if stream_callback:
                     final_output = ""
-                    async for token in client.chat_stream(model=model_config.id, messages=messages):
+                    async for token in client.chat_stream(model=llm_model_id, messages=messages):
                         final_output += token
-                        # Stream token wrapped in a TraceEvent
                         token_event = TraceEvent(
                             task_id=task_id,
                             step_id=step.step_id,
@@ -237,9 +242,13 @@ class ReActExecutor:
                         )
                         await stream_callback(token_event)
                 else:
-                    llm_resp = await client.chat(model=model_config.id, messages=messages)
+                    llm_resp = await client.chat(model=llm_model_id, messages=messages)
                     choices = llm_resp.get("choices", [{}])
-                    final_output = choices[0].get("message", {}).get("content", "No output generated.")
+                    raw = choices[0].get("message", {}).get("content", "") or ""
+                    # Strip Qwen3-style <think>...</think> reasoning blocks; keep only the answer
+                    final_output = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+                    if not final_output:
+                        final_output = raw.strip() or "No output generated."
                 
                 duration_ms = (time.time() - start_time) * 1000.0
                 obs_event = TraceEvent(

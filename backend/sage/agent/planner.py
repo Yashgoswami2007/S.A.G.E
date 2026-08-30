@@ -44,7 +44,7 @@ class Planner:
                 model=model_id,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=1024
+                max_tokens=2048  # increased: Qwen3 <think> blocks need headroom
             )
             
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "")

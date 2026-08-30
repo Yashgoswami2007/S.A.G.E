@@ -15,7 +15,8 @@ venv.bak/
 
 # Project specific
 backend/alembic.ini.bak
-models/
+# Ignore root-level models/ dir (large GGUF files) but NOT backend/sage/models/ Python package
+/models/
 docs/_build/
 *.sqlite3
 sage.db
