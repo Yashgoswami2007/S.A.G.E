@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     AIRGAP_MODE: bool = False
     WORKSPACE_DIR: str = "./workspace"
 
+    # GPU Acceleration
+    # "auto" — detect NVIDIA GPU automatically, fall back to CPU
+    # "cuda" — force CUDA (error if no NVIDIA GPU)
+    # "cpu"  — force CPU even if GPU is available
+    GPU_BACKEND: str = "auto"
+    # VRAM (MB) to keep free for OS / other processes when auto-sizing GPU layers
+    GPU_MEMORY_RESERVE_MB: int = 512
+
     # Database
     DATABASE_URL: str = Field(default="postgresql+asyncpg://sage:sage@localhost:5432/sage")
     REDIS_URL: str = Field(default="redis://localhost:6379")

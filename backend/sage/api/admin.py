@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sage.models.registry import ModelRegistry
 from sage.config import settings
 from sage.models.client import global_circuit_breaker
+from sage.models.gpu_detector import refresh_vram
 
 router = APIRouter()
 
@@ -53,3 +54,45 @@ async def swap_models(swap_req: SwapRequest, request: Request):
     if not success:
         raise HTTPException(status_code=400, detail="Failed to swap models.")
     return {"status": "success", "message": f"Swapped {swap_req.unload_id} for {swap_req.load_id}."}
+
+@router.get("/gpu")
+async def get_gpu_info(request: Request):
+    """Returns the full GPU hardware profile detected at startup."""
+    lm = getattr(request.app.state, "lifecycle_manager", None)
+    hw = getattr(lm, "_hardware", None) if lm else None
+    if not hw:
+        return {
+            "selected_backend": "unknown",
+            "gpus": [],
+            "total_vram_mb": 0,
+            "detection_error": "Hardware detection has not run yet.",
+        }
+
+    # Refresh VRAM for the selected GPU to get live numbers
+    if hw.selected_gpu:
+        refresh_vram(hw.selected_gpu)
+
+    gpus_list = []
+    for g in hw.gpus:
+        gpus_list.append({
+            "vendor": g.vendor,
+            "backend": g.backend,
+            "device_name": g.device_name,
+            "vram_total_mb": g.vram_total_mb,
+            "vram_free_mb": g.vram_free_mb,
+            "driver_version": g.driver_version,
+            "device_index": g.device_index,
+        })
+
+    return {
+        "selected_backend": hw.selected_backend,
+        "selected_gpu": {
+            "device_name": hw.selected_gpu.device_name,
+            "vram_total_mb": hw.selected_gpu.vram_total_mb,
+            "vram_free_mb": hw.selected_gpu.vram_free_mb,
+        } if hw.selected_gpu else None,
+        "total_vram_mb": hw.total_vram_mb,
+        "gpus": gpus_list,
+        "detection_error": hw.detection_error,
+    }
+

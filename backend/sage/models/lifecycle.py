@@ -5,6 +5,7 @@ import httpx
 import structlog
 from typing import Dict, List, Optional
 from sage.models.registry import ModelRegistry, ModelConfig
+from sage.models.gpu_detector import detect_hardware, refresh_vram, HardwareProfile
 
 logger = structlog.get_logger(__name__)
 
@@ -30,16 +31,38 @@ _LLAMA_SERVER_BIN: Optional[str] = None
 class ModelLifecycleManager:
     """Manages the startup, health tracking, and shutdown of local model server processes."""
     
-    def __init__(self, registry: ModelRegistry):
+    def __init__(self, registry: ModelRegistry, gpu_backend_override: str = "auto", vram_reserve_mb: int = 512):
         self.registry = registry
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
         self._health_tasks: Dict[str, asyncio.Task] = {}
         # Track which fallback activations are already in-flight to avoid duplicates
         self._fallback_in_progress: set = set()
+        # GPU hardware profile — populated in start_all()
+        self._hardware: Optional[HardwareProfile] = None
+        self._gpu_backend_override = gpu_backend_override
+        self._vram_reserve_mb = vram_reserve_mb
         
     async def start_all(self):
         """Starts servers for all configured auto-start models if their GGUF files exist."""
         logger.info("Initializing Model Lifecycle Manager...")
+
+        # ── GPU Hardware Detection ───────────────────────────────────────
+        self._hardware = detect_hardware(override_backend=self._gpu_backend_override)
+        hw = self._hardware
+        if hw.selected_gpu:
+            logger.info(
+                "GPU acceleration enabled",
+                backend=hw.selected_backend,
+                device=hw.selected_gpu.device_name,
+                vram_total_mb=hw.selected_gpu.vram_total_mb,
+                vram_free_mb=hw.selected_gpu.vram_free_mb,
+                driver=hw.selected_gpu.driver_version,
+            )
+        else:
+            logger.info(
+                "No GPU detected — models will run on CPU",
+                backend=hw.selected_backend,
+            )
         
         for model in self.registry.list_all():
             if not os.path.exists(model.model_path):
@@ -62,7 +85,21 @@ class ModelLifecycleManager:
     async def _start_server(self, model: ModelConfig):
         """Spawns a llama-server process for the given model."""
         logger.info(f"Starting {model.server_type} for model: {model.id} on port {model.server_port}")
-        
+
+        # ── Resolve GPU layers dynamically ───────────────────────────────
+        hw = self._hardware or HardwareProfile()  # fallback to empty (CPU)
+        # Refresh VRAM snapshot before loading so we have the latest free count
+        if hw.selected_gpu:
+            refresh_vram(hw.selected_gpu)
+        resolved_layers = model.resolve_gpu_layers(hw, vram_reserve_mb=self._vram_reserve_mb)
+        backend_label = hw.selected_backend if resolved_layers > 0 else "cpu"
+        logger.info(
+            f"GPU layer resolution for {model.id}",
+            policy=model.gpu_layers_policy,
+            resolved_ngl=resolved_layers,
+            backend=backend_label,
+        )
+
         if model.server_type == "llama-server":
             global _LLAMA_SERVER_BIN
             if _LLAMA_SERVER_BIN is None:
@@ -77,7 +114,7 @@ class ModelLifecycleManager:
                 "-m", model.model_path,
                 "--port", str(model.server_port),
                 "-c", str(model.context_length),
-                "-ngl", str(model.gpu_layers)
+                "-ngl", str(resolved_layers)
             ]
         elif model.server_type == "vllm":
             cmd = [

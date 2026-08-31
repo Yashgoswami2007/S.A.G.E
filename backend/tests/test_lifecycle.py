@@ -73,7 +73,13 @@ models:
             # Subprocess should have been called
             mock_create_subprocess.assert_called_once()
             args = mock_create_subprocess.call_args[0]
-            self.assertEqual(args[0], "llama-server")
+            # The lifecycle manager resolves the full binary path (e.g. via
+            # shutil.which or fallback), so just check it ends with the
+            # expected binary name rather than matching the exact string.
+            self.assertTrue(
+                args[0].lower().endswith("llama-server") or args[0].lower().endswith("llama-server.exe"),
+                f"Expected llama-server binary, got: {args[0]}"
+            )
             self.assertIn(str(self.valid_file_path), args)
             
         asyncio.run(_test())

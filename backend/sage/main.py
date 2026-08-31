@@ -20,7 +20,11 @@ from sage.models.registry import ModelRegistry
 logger = logging.getLogger("sage")
 
 # Initialize ModelLifecycleManager with its own registry instance
-lifecycle_manager = ModelLifecycleManager(ModelRegistry(settings.MODEL_REGISTRY_PATH))
+lifecycle_manager = ModelLifecycleManager(
+    ModelRegistry(settings.MODEL_REGISTRY_PATH),
+    gpu_backend_override=settings.GPU_BACKEND,
+    vram_reserve_mb=settings.GPU_MEMORY_RESERVE_MB,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

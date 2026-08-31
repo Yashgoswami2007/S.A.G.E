@@ -141,14 +141,29 @@ echo.
 echo  Backend : http://localhost:8000
 echo  API docs: http://localhost:8000/docs
 echo.
-echo  Model stack ^(RTX 5060 / 8 GB VRAM^):
+
+:: GPU Detection for banner display
+set "GPU_DISPLAY=CPU only (no compatible GPU detected)"
+where nvidia-smi >nul 2>nul
+if %errorlevel% equ 0 (
+    for /f "tokens=1,2 delims=," %%a in ('nvidia-smi --query-gpu^=name^,memory.total --format^=csv^,noheader^,nounits 2^>nul') do (
+        set "GPU_NAME=%%a"
+        set "GPU_VRAM=%%b"
+        set "GPU_DISPLAY=%%a (%%b MB VRAM) — CUDA backend"
+    )
+)
+echo  GPU: !GPU_DISPLAY!
+echo.
+echo  Model stack:
 echo    [PRIMARY]    Qwen3-8B       ^(~6 GB^) - reasoning/general  - auto-starts
 echo    [FALLBACK]   Gemma 4 12B   ^(~8 GB^) - coding/vision/general - auto-activates if Qwen3 fails
 echo    ^(Only ONE model loaded at a time - router swaps automatically^)
 echo    ^(If Qwen3-8B fails to load or crashes, Gemma-4-12B is activated automatically^)
 echo.
+echo  GPU acceleration: auto ^(set GPU_BACKEND=cpu to force CPU mode^)
+echo.
 echo  CLI commands:
-echo    sage health                           - check backend + model status
+echo    sage health                           - check backend + model + GPU status
 echo    sage ask "your prompt"               - run an agent task ^(auto-routes^)
 echo    sage ask "..." --profile coder       - force coding profile ^(Gemma 4^)
 echo    sage ask "..." --profile analyst     - analysis profile ^(Qwen3^)
