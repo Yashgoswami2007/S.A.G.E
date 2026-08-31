@@ -1,0 +1,10 @@
+pyproject.toml
+sage_cli/__init__.py
+sage_cli/config.py
+sage_cli/main.py
+sage_cli.egg-info/PKG-INFO
+sage_cli.egg-info/SOURCES.txt
+sage_cli.egg-info/dependency_links.txt
+sage_cli.egg-info/entry_points.txt
+sage_cli.egg-info/requires.txt
+sage_cli.egg-info/top_level.txt

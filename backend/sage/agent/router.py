@@ -61,8 +61,10 @@ class ModelRouter:
         # 4. Fallback Default
         default_model = self.registry.get_default()
         if not default_model:
+            # No READY reasoning model — check if any model is READY at all
             all_ready = [m for m in self.registry.list_all() if m.status == "READY"]
             if all_ready:
+                all_ready.sort(key=lambda x: x.priority)
                 return all_ready[0], "fallback to first available ready model"
             
             all_models = self.registry.list_all()

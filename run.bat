@@ -114,7 +114,7 @@ if %errorlevel% equ 0 (
 :: ── 7. Launch backend in a separate window ───────────
 echo [6/6] Launching SAGE backend on http://localhost:8000 ...
 echo       ^(qwen3-8b will auto-start; if it fails gemma-4-12b activates as fallback^)
-start "SAGE Backend" cmd /k "call "%ROOT%\.venv\Scripts\activate.bat" && cd /d "%ROOT%\backend" && uvicorn sage.main:app --host 0.0.0.0 --port 8000 --reload --loop asyncio"
+start "SAGE Backend" cmd /k "call "%ROOT%\.venv\Scripts\activate.bat" && cd /d "%ROOT%\backend" && uvicorn sage.main:app --host 0.0.0.0 --port 8000 --loop asyncio"
 
 :: ── 8. Wait for backend to accept connections ─────────
 echo.

@@ -2,6 +2,7 @@ import os
 import re
 import time
 import json
+import logging
 from typing import Callable, Optional, Awaitable, Any
 from sage.agent.state import AgentState, ExecutionTrace, TraceEvent
 from sage.agent.schemas import AgentResponse, Plan
@@ -14,6 +15,7 @@ from sage.agent.planner import Planner
 from sage.core.utils import generate_id
 
 StreamCallback = Callable[[TraceEvent], Awaitable[None]]
+logger = logging.getLogger("sage.executor")
 
 class ReActExecutor:
     def __init__(
@@ -74,6 +76,46 @@ class ReActExecutor:
         # Use model_path when it is an actual file path, fall back to id otherwise.
         llm_model_id = model_config.model_path if os.path.isabs(model_config.model_path) else model_config.id
 
+        # ── Fallback helper ──────────────────────────────────────────────────
+        async def _try_activate_fallback(failed_id: str):
+            """
+            If the routed model fails during execution, attempt to activate its
+            configured fallback and re-route.  Returns (new_client, new_model_id,
+            new_model_config) or raises if no fallback is available.
+            """
+            fallback_cfg = self.router.registry.get_fallback(failed_id)
+            if not fallback_cfg:
+                raise RuntimeError(
+                    f"Model {failed_id} failed and no fallback is configured."
+                )
+            logger.warning(
+                f"Model {failed_id} unavailable during execution. "
+                f"Activating fallback: {fallback_cfg.id}"
+            )
+            if self.lifecycle_manager:
+                # Unload the failed model first to free VRAM, then start fallback
+                await self.lifecycle_manager.swap_model(
+                    load_id=fallback_cfg.id,
+                    unload_id=failed_id
+                )
+            else:
+                raise RuntimeError(
+                    f"Cannot activate fallback {fallback_cfg.id}: no lifecycle manager."
+                )
+            if fallback_cfg.status != "READY":
+                raise RuntimeError(
+                    f"Fallback {fallback_cfg.id} started but never became READY."
+                )
+            new_client = OpenAICompatibleClient(
+                base_url=f"http://localhost:{fallback_cfg.server_port}"
+            )
+            new_model_id = (
+                fallback_cfg.model_path
+                if os.path.isabs(fallback_cfg.model_path)
+                else fallback_cfg.id
+            )
+            return new_client, new_model_id, fallback_cfg
+
         # Initialize persistent trace
         trace = ExecutionTrace(
             task_id=task_id,
@@ -99,7 +141,26 @@ class ReActExecutor:
         )
         await emit(plan_event)
 
-        plan: Plan = await self.planner.create_plan(prompt, profile, client, llm_model_id)
+        # Planning — with fallback if the primary model is unreachable
+        try:
+            plan: Plan = await self.planner.create_plan(prompt, profile, client, llm_model_id)
+        except Exception as plan_err:
+            logger.warning(
+                f"Planning failed with model {model_config.id} ({plan_err}). "
+                "Attempting fallback model."
+            )
+            try:
+                client, llm_model_id, model_config = await _try_activate_fallback(model_config.id)
+                routing_reason = f"fallback to {model_config.id} after primary planning failure"
+                plan = await self.planner.create_plan(prompt, profile, client, llm_model_id)
+            except Exception as fb_err:
+                logger.error(f"Fallback planning also failed: {fb_err}")
+                return AgentResponse(
+                    task_id=task_id,
+                    status=AgentState.FAILED,
+                    output=f"All models unavailable. Primary error: {plan_err}. Fallback error: {fb_err}",
+                    trace=trace
+                )
         
         final_output = ""
         current_step_idx = 0
@@ -242,7 +303,25 @@ class ReActExecutor:
                         )
                         await stream_callback(token_event)
                 else:
-                    llm_resp = await client.chat(model=llm_model_id, messages=messages)
+                    try:
+                        llm_resp = await client.chat(model=llm_model_id, messages=messages)
+                    except Exception as llm_err:
+                        logger.warning(
+                            f"LLM call failed for {model_config.id} ({llm_err}). "
+                            "Attempting fallback model."
+                        )
+                        try:
+                            client, llm_model_id, model_config = await _try_activate_fallback(model_config.id)
+                            routing_reason = f"fallback to {model_config.id} after LLM call failure"
+                            llm_resp = await client.chat(model=llm_model_id, messages=messages)
+                        except Exception as fb_err:
+                            logger.error(f"Fallback LLM call also failed: {fb_err}")
+                            return AgentResponse(
+                                task_id=task_id,
+                                status=AgentState.FAILED,
+                                output=f"All models unavailable. Primary error: {llm_err}. Fallback error: {fb_err}",
+                                trace=trace
+                            )
                     choices = llm_resp.get("choices", [{}])
                     raw = choices[0].get("message", {}).get("content", "") or ""
                     # Strip Qwen3-style <think>...</think> reasoning blocks; keep only the answer

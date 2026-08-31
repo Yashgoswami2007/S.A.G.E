@@ -21,6 +21,7 @@ class ModelConfig(BaseModel):
     min_vram_gb: int
     context_length: int
     status: str = "UNAVAILABLE"  # READY, DEGRADED, UNAVAILABLE
+    fallback_model_id: Optional[str] = None  # id of model to try if this one fails
 
 class ModelRegistry:
     def __init__(self, registry_path: str):
@@ -63,6 +64,17 @@ class ModelRegistry:
     def get_default(self) -> Optional[ModelConfig]:
         """Returns the highest priority general/reasoning model that is READY."""
         return self.get_ready_by_capability("reasoning")
+
+    def get_fallback(self, model_id: str) -> Optional[ModelConfig]:
+        """
+        Returns the configured fallback for the given model id, if any.
+        The fallback does not need to be READY yet — the lifecycle manager
+        will start it on demand.
+        """
+        model = self.models.get(model_id)
+        if model and model.fallback_model_id:
+            return self.models.get(model.fallback_model_id)
+        return None
         
     def list_all(self) -> List[ModelConfig]:
         return list(self.models.values())

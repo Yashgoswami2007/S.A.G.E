@@ -1,0 +1,2 @@
+[console_scripts]
+sage = sage_cli.main:app

@@ -1,6 +1,6 @@
 models:
   - id: qwen3-8b
-    name: "Qwen3 8B Instruct"
+    name: "Qwen3-8B-Q4_K_M"
     model_path: "./models/Qwen3-8B-Q4_K_M.gguf"
     server_port: 8001
     server_type: "llama-server"
@@ -10,6 +10,7 @@ models:
     priority: 1
     min_vram_gb: 5
     context_length: 8192
+    fallback_model_id: "gemma-4-12b"   # loaded automatically if qwen3-8b fails
 
   - id: gemma-4-12b
     name: "Gemma 4 12B IT"
@@ -18,7 +19,7 @@ models:
     server_type: "llama-server"
     auto_start: false
     gpu_layers: 99
-    capabilities: ["coding", "vision"]
-    priority: 1
+    capabilities: ["coding", "vision", "reasoning", "general"]  # covers all tasks when acting as fallback
+    priority: 2
     min_vram_gb: 8
     context_length: 8192
