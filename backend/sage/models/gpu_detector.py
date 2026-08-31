@@ -1,217 +1,184 @@
 """
-GPU Hardware Detection Module for SAGE.
+GPU Detection Module — nvidia-smi based CUDA GPU detection for SAGE.
 
-Detects NVIDIA GPUs via nvidia-smi, falls back to CPU when no compatible GPU
-is found.  ROCm (AMD) detection is stubbed for future implementation.
-
-Usage:
-    from sage.models.gpu_detector import detect_hardware
-    hw = detect_hardware()
-    print(hw.selected_backend)  # "cuda" | "cpu"
+Uses `nvidia-smi --query-gpu=... --format=csv` as the sole authoritative
+detector.  Result is cached for the process lifetime (hardware doesn't
+change at runtime).
 """
 
 import subprocess
-import csv
-import io
 import structlog
-from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Optional
+from pydantic import BaseModel
 
 logger = structlog.get_logger(__name__)
 
 
-@dataclass
-class GPUInfo:
-    """Represents a single detected GPU device."""
-    vendor: str            # "nvidia" | "amd"
-    backend: str           # "cuda" | "rocm"
-    device_name: str       # e.g. "NVIDIA GeForce RTX 4060 Ti"
-    vram_total_mb: int     # Total VRAM in MB
-    vram_free_mb: int      # Free VRAM in MB
-    driver_version: str    # e.g. "560.35.03"
-    device_index: int      # GPU index (0-based)
+# ── Data Models ───────────────────────────────────────────────────────────────
+
+class GPUInfo(BaseModel):
+    """Information about a single NVIDIA GPU."""
+    gpu_index: int          # Device ordinal (0, 1, …)
+    name: str               # e.g. "NVIDIA GeForce RTX 3060"
+    vram_total_mb: int      # Total VRAM in MB
+    vram_free_mb: int       # Currently free VRAM in MB
+    driver_version: str     # e.g. "560.35.03"
+    cuda_version: str       # CUDA version reported by the driver, e.g. "12.4"
 
 
-@dataclass
-class HardwareProfile:
-    """Aggregated hardware detection result."""
-    gpus: List[GPUInfo] = field(default_factory=list)
-    selected_backend: str = "cpu"          # "cuda" | "rocm" | "cpu"
-    selected_gpu: Optional[GPUInfo] = None
-    total_vram_mb: int = 0
-    detection_error: Optional[str] = None  # Non-fatal error message, if any
+class GPUStatus(BaseModel):
+    """Aggregate GPU status for the host machine."""
+    cuda_available: bool    # True if at least one CUDA GPU was found
+    gpu_count: int
+    gpus: list[GPUInfo]
+    driver_version: str     # Top-level convenience copy
+    cuda_version: str       # Top-level convenience copy
 
 
-def _detect_nvidia() -> List[GPUInfo]:
+# ── Detection ─────────────────────────────────────────────────────────────────
+
+_cached_status: Optional[GPUStatus] = None
+
+
+def _parse_nvidia_smi() -> Optional[GPUStatus]:
     """
-    Detect NVIDIA GPUs by calling nvidia-smi.
+    Run ``nvidia-smi`` and parse its CSV output.
 
-    Returns a list of GPUInfo for each detected NVIDIA device.
-    Returns an empty list if nvidia-smi is not available or fails.
+    Query fields:
+        index, name, memory.total, memory.free, driver_version, cuda_version
+
+    Returns ``None`` when nvidia-smi is not installed, fails to execute,
+    or produces unparseable output.
     """
+    cmd = [
+        "nvidia-smi",
+        "--query-gpu=index,name,memory.total,memory.free",
+        "--format=csv,noheader,nounits",
+    ]
+
     try:
         result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=index,name,memory.total,memory.free,driver_version",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
+            cmd, capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
-            logger.debug("nvidia-smi returned non-zero exit code", returncode=result.returncode)
-            return []
-
-        gpus: List[GPUInfo] = []
-        reader = csv.reader(io.StringIO(result.stdout.strip()))
-        for row in reader:
-            if len(row) < 5:
-                continue
-            # nvidia-smi CSV columns: index, name, memory.total [MiB], memory.free [MiB], driver_version
-            try:
-                idx = int(row[0].strip())
-                name = row[1].strip()
-                vram_total = int(float(row[2].strip()))
-                vram_free = int(float(row[3].strip()))
-                driver = row[4].strip()
-                gpus.append(GPUInfo(
-                    vendor="nvidia",
-                    backend="cuda",
-                    device_name=name,
-                    vram_total_mb=vram_total,
-                    vram_free_mb=vram_free,
-                    driver_version=driver,
-                    device_index=idx,
-                ))
-            except (ValueError, IndexError) as e:
-                logger.warning("Failed to parse nvidia-smi row", row=row, error=str(e))
-                continue
-
-        return gpus
-
+            logger.warning(
+                "nvidia-smi exited with non-zero code",
+                returncode=result.returncode,
+                stderr=result.stderr.strip(),
+            )
+            return None
     except FileNotFoundError:
-        logger.debug("nvidia-smi not found on PATH — no NVIDIA GPU detected")
-        return []
+        logger.info("nvidia-smi not found on PATH — no NVIDIA GPU detected")
+        return None
     except subprocess.TimeoutExpired:
         logger.warning("nvidia-smi timed out after 10 s")
-        return []
-    except Exception as e:
-        logger.warning("Unexpected error running nvidia-smi", error=str(e))
-        return []
+        return None
+    except Exception as exc:
+        logger.warning("nvidia-smi failed unexpectedly", error=str(exc))
+        return None
 
-
-def _detect_amd() -> List[GPUInfo]:
-    """
-    Stub for AMD ROCm GPU detection.
-
-    ROCm support is planned for a future phase.  This function is here so the
-    detection pipeline is already wired; it simply returns an empty list.
-    """
-    # TODO: Implement AMD ROCm detection via rocm-smi when ROCm support is added.
-    #
-    # Expected command:
-    #   rocm-smi --showmeminfo vram --csv
-    #
-    # Parsing would follow the same pattern as _detect_nvidia().
-    return []
-
-
-def detect_hardware(override_backend: str = "auto") -> HardwareProfile:
-    """
-    Detect available GPU hardware and select the best inference backend.
-
-    Args:
-        override_backend: Force a specific backend.
-            - "auto" — detect automatically (default)
-            - "cuda" — force CUDA (fail if no NVIDIA GPU)
-            - "cpu"  — force CPU even if a GPU is available
-
-    Returns:
-        HardwareProfile with detection results.
-    """
-    profile = HardwareProfile()
-
-    # ── Forced CPU mode ──────────────────────────────────────────────────
-    if override_backend == "cpu":
-        logger.info("GPU backend override: forced CPU mode")
-        profile.selected_backend = "cpu"
-        return profile
-
-    # ── Detect NVIDIA ────────────────────────────────────────────────────
-    nvidia_gpus = _detect_nvidia()
-    if nvidia_gpus:
-        profile.gpus.extend(nvidia_gpus)
-        # Select the GPU with the most free VRAM
-        best = max(nvidia_gpus, key=lambda g: g.vram_free_mb)
-        profile.selected_gpu = best
-        profile.selected_backend = "cuda"
-        profile.total_vram_mb = best.vram_total_mb
-        logger.info(
-            "NVIDIA GPU detected",
-            device=best.device_name,
-            vram_total_mb=best.vram_total_mb,
-            vram_free_mb=best.vram_free_mb,
-            driver=best.driver_version,
-        )
-
-        if override_backend == "cuda":
-            return profile  # Caller explicitly wanted CUDA, and we found it
-        return profile
-
-    # ── Forced CUDA but no NVIDIA GPU ────────────────────────────────────
-    if override_backend == "cuda":
-        msg = "GPU_BACKEND=cuda but no NVIDIA GPU detected. Falling back to CPU."
-        logger.warning(msg)
-        profile.selected_backend = "cpu"
-        profile.detection_error = msg
-        return profile
-
-    # ── Detect AMD (stub — returns empty for now) ────────────────────────
-    amd_gpus = _detect_amd()
-    if amd_gpus:
-        profile.gpus.extend(amd_gpus)
-        best = max(amd_gpus, key=lambda g: g.vram_free_mb)
-        profile.selected_gpu = best
-        profile.selected_backend = "rocm"
-        profile.total_vram_mb = best.vram_total_mb
-        logger.info("AMD GPU detected", device=best.device_name)
-        return profile
-
-    # ── No GPU found ─────────────────────────────────────────────────────
-    logger.info("No compatible GPU detected — using CPU backend")
-    profile.selected_backend = "cpu"
-    return profile
-
-
-def refresh_vram(gpu: GPUInfo) -> GPUInfo:
-    """
-    Re-query nvidia-smi for the latest free VRAM on a specific device.
-
-    Useful before model loading to get an up-to-date VRAM snapshot.
-    Returns the same GPUInfo with updated vram_free_mb, or the original
-    if the query fails.
-    """
-    if gpu.vendor != "nvidia":
-        return gpu
-
+    # ── Grab driver & CUDA version from a separate lightweight query ──────
+    driver_version = ""
+    cuda_version = ""
     try:
-        result = subprocess.run(
+        ver_result = subprocess.run(
             [
                 "nvidia-smi",
-                f"--id={gpu.device_index}",
-                "--query-gpu=memory.free",
+                "--query-gpu=driver_version",
                 "--format=csv,noheader,nounits",
             ],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            capture_output=True, text=True, timeout=10,
         )
-        if result.returncode == 0:
-            free = int(float(result.stdout.strip()))
-            gpu.vram_free_mb = free
-    except Exception as e:
-        logger.debug("Failed to refresh VRAM info", error=str(e))
+        if ver_result.returncode == 0 and ver_result.stdout.strip():
+            # All GPUs share the same driver; take the first line.
+            driver_version = ver_result.stdout.strip().splitlines()[0].strip()
+    except Exception:
+        pass
 
-    return gpu
+    try:
+        # nvidia-smi reports the highest CUDA version the driver supports
+        # via the top-level header.  The quickest way to grab it is:
+        header_result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=10,
+        )
+        if header_result.returncode == 0:
+            for line in header_result.stdout.splitlines():
+                if "CUDA Version:" in line:
+                    # e.g. "| NVIDIA-SMI 560.35.03    Driver Version: 560.35.03    CUDA Version: 12.6  |"
+                    cuda_version = line.split("CUDA Version:")[1].strip().rstrip("|").strip()
+                    break
+    except Exception:
+        pass
+
+    # ── Parse per-GPU CSV rows ────────────────────────────────────────────
+    gpus: list[GPUInfo] = []
+    for line in result.stdout.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 4:
+            logger.warning("Skipping malformed nvidia-smi line", line=line)
+            continue
+        try:
+            gpus.append(GPUInfo(
+                gpu_index=int(parts[0]),
+                name=parts[1],
+                vram_total_mb=int(parts[2]),
+                vram_free_mb=int(parts[3]),
+                driver_version=driver_version,
+                cuda_version=cuda_version,
+            ))
+        except (ValueError, IndexError) as exc:
+            logger.warning("Failed to parse nvidia-smi row", line=line, error=str(exc))
+            continue
+
+    if not gpus:
+        return None
+
+    return GPUStatus(
+        cuda_available=True,
+        gpu_count=len(gpus),
+        gpus=gpus,
+        driver_version=driver_version,
+        cuda_version=cuda_version,
+    )
+
+
+def detect_gpus(*, force_refresh: bool = False) -> GPUStatus:
+    """
+    Detect NVIDIA CUDA GPUs via nvidia-smi.
+
+    Results are cached for the lifetime of the process.  Pass
+    ``force_refresh=True`` to re-probe (useful in tests).
+    """
+    global _cached_status  # noqa: PLW0603
+
+    if _cached_status is not None and not force_refresh:
+        return _cached_status
+
+    status = _parse_nvidia_smi()
+
+    if status is None:
+        status = GPUStatus(
+            cuda_available=False,
+            gpu_count=0,
+            gpus=[],
+            driver_version="",
+            cuda_version="",
+        )
+
+    _cached_status = status
+
+    if status.cuda_available:
+        for gpu in status.gpus:
+            logger.info(
+                "CUDA GPU detected",
+                index=gpu.gpu_index,
+                name=gpu.name,
+                vram_total_mb=gpu.vram_total_mb,
+                vram_free_mb=gpu.vram_free_mb,
+                driver=status.driver_version,
+                cuda=status.cuda_version,
+            )
+    else:
+        logger.info("No CUDA GPUs detected — models will run in CPU-only mode")
+
+    return status

@@ -6,8 +6,7 @@ models:
     server_type: "llama-server"
     auto_start: true
     gpu_layers: 99
-    gpu_layers_policy: auto        # "auto" | "all" | "none" | integer
-    estimated_size_mb: 5000        # ~5 GB Q4_K_M — used for VRAM-aware auto sizing
+    gpu_mode: auto             # auto | gpu | cpu
     capabilities: ["reasoning", "general"]
     priority: 1
     min_vram_gb: 5
@@ -21,9 +20,9 @@ models:
     server_type: "llama-server"
     auto_start: false
     gpu_layers: 99
-    gpu_layers_policy: auto        # "auto" | "all" | "none" | integer
-    estimated_size_mb: 7500        # ~7.5 GB Q4_K_M — used for VRAM-aware auto sizing
+    gpu_mode: auto             # auto | gpu | cpu
     capabilities: ["coding", "vision", "reasoning", "general"]  # covers all tasks when acting as fallback
     priority: 2
     min_vram_gb: 8
     context_length: 8192
+

@@ -111,12 +111,22 @@ if %errorlevel% equ 0 (
     echo       ^(Fine for local/model-only usage^)
 )
 
-:: ── 7. Launch backend in a separate window ───────────
-echo [6/6] Launching SAGE backend on http://localhost:8000 ...
+:: ── 7. GPU Check ──────────────────────────────────────
+echo [6/7] Checking for NVIDIA GPU...
+where nvidia-smi >nul 2>nul
+if %errorlevel% equ 0 (
+    echo       NVIDIA GPU detected. Printing status:
+    nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
+) else (
+    echo       [INFO] nvidia-smi not found. SAGE will run in CPU-only mode.
+)
+
+:: ── 8. Launch backend in a separate window ───────────
+echo [7/7] Launching SAGE backend on http://localhost:8000 ...
 echo       ^(qwen3-8b will auto-start; if it fails gemma-4-12b activates as fallback^)
 start "SAGE Backend" cmd /k "call "%ROOT%\.venv\Scripts\activate.bat" && cd /d "%ROOT%\backend" && uvicorn sage.main:app --host 0.0.0.0 --port 8000 --loop asyncio"
 
-:: ── 8. Wait for backend to accept connections ─────────
+:: ── 9. Wait for backend to accept connections ─────────
 echo.
 echo Waiting for backend to become ready...
 set /a TRIES=0
@@ -141,29 +151,14 @@ echo.
 echo  Backend : http://localhost:8000
 echo  API docs: http://localhost:8000/docs
 echo.
-
-:: GPU Detection for banner display
-set "GPU_DISPLAY=CPU only (no compatible GPU detected)"
-where nvidia-smi >nul 2>nul
-if %errorlevel% equ 0 (
-    for /f "tokens=1,2 delims=," %%a in ('nvidia-smi --query-gpu^=name^,memory.total --format^=csv^,noheader^,nounits 2^>nul') do (
-        set "GPU_NAME=%%a"
-        set "GPU_VRAM=%%b"
-        set "GPU_DISPLAY=%%a (%%b MB VRAM) — CUDA backend"
-    )
-)
-echo  GPU: !GPU_DISPLAY!
-echo.
-echo  Model stack:
+echo  Model stack ^(RTX 5060 / 8 GB VRAM^):
 echo    [PRIMARY]    Qwen3-8B       ^(~6 GB^) - reasoning/general  - auto-starts
 echo    [FALLBACK]   Gemma 4 12B   ^(~8 GB^) - coding/vision/general - auto-activates if Qwen3 fails
 echo    ^(Only ONE model loaded at a time - router swaps automatically^)
 echo    ^(If Qwen3-8B fails to load or crashes, Gemma-4-12B is activated automatically^)
 echo.
-echo  GPU acceleration: auto ^(set GPU_BACKEND=cpu to force CPU mode^)
-echo.
 echo  CLI commands:
-echo    sage health                           - check backend + model + GPU status
+echo    sage health                           - check backend + model status
 echo    sage ask "your prompt"               - run an agent task ^(auto-routes^)
 echo    sage ask "..." --profile coder       - force coding profile ^(Gemma 4^)
 echo    sage ask "..." --profile analyst     - analysis profile ^(Qwen3^)

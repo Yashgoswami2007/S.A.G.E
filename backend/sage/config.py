@@ -16,14 +16,6 @@ class Settings(BaseSettings):
     AIRGAP_MODE: bool = False
     WORKSPACE_DIR: str = "./workspace"
 
-    # GPU Acceleration
-    # "auto" — detect NVIDIA GPU automatically, fall back to CPU
-    # "cuda" — force CUDA (error if no NVIDIA GPU)
-    # "cpu"  — force CPU even if GPU is available
-    GPU_BACKEND: str = "auto"
-    # VRAM (MB) to keep free for OS / other processes when auto-sizing GPU layers
-    GPU_MEMORY_RESERVE_MB: int = 512
-
     # Database
     DATABASE_URL: str = Field(default="postgresql+asyncpg://sage:sage@localhost:5432/sage")
     REDIS_URL: str = Field(default="redis://localhost:6379")
@@ -33,6 +25,12 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_MINUTES: int = 60
     
+    # GPU — global override for GPU offloading mode
+    # "auto" = use GPU if CUDA detected + VRAM sufficient, else CPU
+    # "gpu"  = force GPU (fail if unavailable)
+    # "cpu"  = force CPU-only
+    GPU_MODE: str = "auto"
+
     # Models — default is relative to project root, resolved below
     MODEL_REGISTRY_PATH: str = "config/model_registry.yaml"
 

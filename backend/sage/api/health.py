@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from sage.db.session import get_db
@@ -6,13 +6,14 @@ from sage.core.schemas import HealthResponse
 from sage.config import settings
 from sage.models.registry import ModelRegistry
 from sage.models.health import check_model_health
+from sage.models.gpu_detector import detect_gpus
 import httpx
 
 router = APIRouter()
 
 @router.get("", response_model=HealthResponse)
-async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
-    """Returns system health status including GPU information."""
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Returns system health status."""
     services = {"backend": "ok"}
     
     # Check DB
@@ -43,32 +44,14 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
             "capabilities": m.capabilities
         })
 
-    # GPU Info
-    gpu_info = None
-    lm = getattr(request.app.state, "lifecycle_manager", None)
-    hw = getattr(lm, "_hardware", None) if lm else None
-    if hw and hw.selected_gpu:
-        gpu_info = {
-            "backend": hw.selected_backend,
-            "device": hw.selected_gpu.device_name,
-            "vram_total_mb": hw.selected_gpu.vram_total_mb,
-            "vram_free_mb": hw.selected_gpu.vram_free_mb,
-            "driver_version": hw.selected_gpu.driver_version,
-        }
-    elif hw:
-        gpu_info = {
-            "backend": hw.selected_backend,
-            "device": None,
-            "vram_total_mb": 0,
-            "vram_free_mb": 0,
-            "driver_version": None,
-        }
-
     status_str = "ok" if all(v == "ok" for v in services.values()) else "degraded"
+    
+    gpu_status = detect_gpus()
+    gpu_info = gpu_status.model_dump() if gpu_status else None
     
     return HealthResponse(
         status=status_str,
         services=services,
         models=models_summary,
-        gpu=gpu_info,
+        gpu=gpu_info
     )

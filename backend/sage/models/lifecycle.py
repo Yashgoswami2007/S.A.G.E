@@ -5,7 +5,7 @@ import httpx
 import structlog
 from typing import Dict, List, Optional
 from sage.models.registry import ModelRegistry, ModelConfig
-from sage.models.gpu_detector import detect_hardware, refresh_vram, HardwareProfile
+from sage.models.gpu_detector import detect_gpus, GPUStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -31,38 +31,22 @@ _LLAMA_SERVER_BIN: Optional[str] = None
 class ModelLifecycleManager:
     """Manages the startup, health tracking, and shutdown of local model server processes."""
     
-    def __init__(self, registry: ModelRegistry, gpu_backend_override: str = "auto", vram_reserve_mb: int = 512):
+    def __init__(self, registry: ModelRegistry):
         self.registry = registry
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
         self._health_tasks: Dict[str, asyncio.Task] = {}
         # Track which fallback activations are already in-flight to avoid duplicates
         self._fallback_in_progress: set = set()
-        # GPU hardware profile — populated in start_all()
-        self._hardware: Optional[HardwareProfile] = None
-        self._gpu_backend_override = gpu_backend_override
-        self._vram_reserve_mb = vram_reserve_mb
+        # GPU status — populated on start_all()
+        self.gpu_status: Optional[GPUStatus] = None
         
     async def start_all(self):
         """Starts servers for all configured auto-start models if their GGUF files exist."""
         logger.info("Initializing Model Lifecycle Manager...")
-
-        # ── GPU Hardware Detection ───────────────────────────────────────
-        self._hardware = detect_hardware(override_backend=self._gpu_backend_override)
-        hw = self._hardware
-        if hw.selected_gpu:
-            logger.info(
-                "GPU acceleration enabled",
-                backend=hw.selected_backend,
-                device=hw.selected_gpu.device_name,
-                vram_total_mb=hw.selected_gpu.vram_total_mb,
-                vram_free_mb=hw.selected_gpu.vram_free_mb,
-                driver=hw.selected_gpu.driver_version,
-            )
-        else:
-            logger.info(
-                "No GPU detected — models will run on CPU",
-                backend=hw.selected_backend,
-            )
+        
+        # ── Detect GPUs once at startup ───────────────────────────────────
+        self.gpu_status = detect_gpus()
+        self._log_gpu_banner()
         
         for model in self.registry.list_all():
             if not os.path.exists(model.model_path):
@@ -81,25 +65,91 @@ class ModelLifecycleManager:
         # After spawning all auto-start servers, wait up to 60 s for each to become
         # READY and trigger fallback for any that never make it.
         asyncio.create_task(self._watch_startup_and_fallback())
-            
+
+    def _log_gpu_banner(self):
+        """Log a clear startup banner showing GPU status."""
+        if self.gpu_status and self.gpu_status.cuda_available:
+            for gpu in self.gpu_status.gpus:
+                logger.info(
+                    f"[GPU] CUDA available: True | "
+                    f"{gpu.name} ({gpu.vram_total_mb} MB total, {gpu.vram_free_mb} MB free) | "
+                    f"Driver: {self.gpu_status.driver_version} | CUDA: {self.gpu_status.cuda_version}"
+                )
+        else:
+            logger.info("[GPU] CUDA not available — all models will run in CPU-only mode (slower)")
+
+    def _resolve_gpu_layers(self, model: ModelConfig) -> int:
+        """
+        Determine the effective gpu_layers value for a model based on:
+        - The model's gpu_mode ("auto" / "gpu" / "cpu")
+        - The global GPU_MODE override from settings
+        - Whether CUDA is available
+        - Whether free VRAM is sufficient (free VRAM >= min_vram_gb)
+
+        Returns:
+            int: 99 for full GPU offload, 0 for CPU-only.
+            Raises RuntimeError for gpu_mode="gpu" when no CUDA is available.
+        """
+        # Import settings lazily to avoid circular imports at module level
+        from sage.config import settings
+
+        # Global override takes precedence over per-model setting
+        effective_mode = settings.GPU_MODE if settings.GPU_MODE != "auto" else model.gpu_mode
+
+        gpu_status = self.gpu_status or GPUStatus(
+            cuda_available=False, gpu_count=0, gpus=[], driver_version="", cuda_version=""
+        )
+
+        if effective_mode == "cpu":
+            logger.info(f"Model {model.id}: gpu_mode=cpu → ngl=0 (CPU-only)")
+            return 0
+
+        if effective_mode == "gpu":
+            if not gpu_status.cuda_available:
+                logger.error(
+                    f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected — cannot start"
+                )
+                raise RuntimeError(f"gpu_mode=gpu requires CUDA but no GPU found for {model.id}")
+            logger.info(f"Model {model.id}: gpu_mode=gpu → ngl=99 (forced GPU offload)")
+            return 99
+
+        # effective_mode == "auto"
+        if not gpu_status.cuda_available:
+            logger.info(f"Model {model.id}: gpu_mode=auto, no CUDA → ngl=0 (CPU fallback)")
+            return 0
+
+        # CUDA is available — check VRAM fit
+        # Use the GPU with the most free VRAM
+        best_gpu = max(gpu_status.gpus, key=lambda g: g.vram_free_mb)
+        required_mb = model.min_vram_gb * 1024
+        if best_gpu.vram_free_mb >= required_mb:
+            logger.info(
+                f"Model {model.id}: gpu_mode=auto, "
+                f"needs {model.min_vram_gb} GB, "
+                f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
+                f"→ ngl=99 (GPU offload)"
+            )
+            return 99
+        else:
+            logger.warning(
+                f"Model {model.id}: gpu_mode=auto, "
+                f"needs {model.min_vram_gb} GB ({required_mb} MB) but only "
+                f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
+                f"→ ngl=0 (CPU fallback — insufficient VRAM)"
+            )
+            return 0
+
     async def _start_server(self, model: ModelConfig):
         """Spawns a llama-server process for the given model."""
         logger.info(f"Starting {model.server_type} for model: {model.id} on port {model.server_port}")
 
-        # ── Resolve GPU layers dynamically ───────────────────────────────
-        hw = self._hardware or HardwareProfile()  # fallback to empty (CPU)
-        # Refresh VRAM snapshot before loading so we have the latest free count
-        if hw.selected_gpu:
-            refresh_vram(hw.selected_gpu)
-        resolved_layers = model.resolve_gpu_layers(hw, vram_reserve_mb=self._vram_reserve_mb)
-        backend_label = hw.selected_backend if resolved_layers > 0 else "cpu"
-        logger.info(
-            f"GPU layer resolution for {model.id}",
-            policy=model.gpu_layers_policy,
-            resolved_ngl=resolved_layers,
-            backend=backend_label,
-        )
-
+        # ── Resolve GPU layers ────────────────────────────────────────────
+        try:
+            effective_ngl = self._resolve_gpu_layers(model)
+        except RuntimeError:
+            model.status = "UNAVAILABLE"
+            return
+        
         if model.server_type == "llama-server":
             global _LLAMA_SERVER_BIN
             if _LLAMA_SERVER_BIN is None:
@@ -114,9 +164,17 @@ class ModelLifecycleManager:
                 "-m", model.model_path,
                 "--port", str(model.server_port),
                 "-c", str(model.context_length),
-                "-ngl", str(resolved_layers)
+                "-ngl", str(effective_ngl)
             ]
         elif model.server_type == "vllm":
+            # vLLM requires a CUDA GPU — cannot run CPU-only
+            if not (self.gpu_status and self.gpu_status.cuda_available):
+                logger.error(
+                    f"Model {model.id}: vLLM requires CUDA GPU but none detected. "
+                    "Marking UNAVAILABLE."
+                )
+                model.status = "UNAVAILABLE"
+                return
             cmd = [
                 "python", "-m", "vllm.entrypoints.openai.api_server",
                 "--model", model.model_path,

@@ -7,6 +7,8 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 from sage.models.registry import ModelRegistry, ModelConfig
 from sage.models.lifecycle import ModelLifecycleManager
+from sage.models.gpu_detector import GPUStatus, GPUInfo
+from sage.config import settings
 
 class TestModelLifecycleManager(unittest.TestCase):
     def setUp(self):
@@ -73,13 +75,7 @@ models:
             # Subprocess should have been called
             mock_create_subprocess.assert_called_once()
             args = mock_create_subprocess.call_args[0]
-            # The lifecycle manager resolves the full binary path (e.g. via
-            # shutil.which or fallback), so just check it ends with the
-            # expected binary name rather than matching the exact string.
-            self.assertTrue(
-                args[0].lower().endswith("llama-server") or args[0].lower().endswith("llama-server.exe"),
-                f"Expected llama-server binary, got: {args[0]}"
-            )
+            self.assertTrue(args[0].lower().endswith("llama-server") or args[0].lower().endswith("llama-server.exe"))
             self.assertIn(str(self.valid_file_path), args)
             
         asyncio.run(_test())
@@ -101,6 +97,42 @@ models:
         
         # Should still not find reasoning
         self.assertIsNone(self.registry.get_ready_by_capability("reasoning"))
+
+    def test_resolve_gpu_layers(self):
+        m = self.registry.models["test-model-1"] # min_vram_gb: 1
+        
+        # Default mock GPU (2 GB total, 1.5 GB free)
+        mock_gpu_status = GPUStatus(
+            cuda_available=True, gpu_count=1, driver_version="1", cuda_version="1",
+            gpus=[GPUInfo(gpu_index=0, name="GPU", vram_total_mb=2048, vram_free_mb=1500, driver_version="1", cuda_version="1")]
+        )
+        self.lifecycle.gpu_status = mock_gpu_status
+        
+        # 1. gpu_mode = auto, enough VRAM -> 99
+        m.gpu_mode = "auto"
+        m.min_vram_gb = 1
+        settings.GPU_MODE = "auto"
+        self.assertEqual(self.lifecycle._resolve_gpu_layers(m), 99)
+        
+        # 2. gpu_mode = auto, NOT enough VRAM -> 0
+        m.min_vram_gb = 2 # 2 GB required > 1.5 GB free
+        self.assertEqual(self.lifecycle._resolve_gpu_layers(m), 0)
+        
+        # 3. gpu_mode = cpu -> 0
+        m.gpu_mode = "cpu"
+        self.assertEqual(self.lifecycle._resolve_gpu_layers(m), 0)
+        
+        # 4. Global override
+        settings.GPU_MODE = "gpu"
+        m.gpu_mode = "cpu"
+        self.assertEqual(self.lifecycle._resolve_gpu_layers(m), 99)
+        
+        # 5. Forced GPU but no CUDA -> RuntimeError
+        self.lifecycle.gpu_status = GPUStatus(cuda_available=False, gpu_count=0, driver_version="", cuda_version="", gpus=[])
+        settings.GPU_MODE = "auto"
+        m.gpu_mode = "gpu"
+        with self.assertRaises(RuntimeError):
+            self.lifecycle._resolve_gpu_layers(m)
 
 if __name__ == "__main__":
     unittest.main()

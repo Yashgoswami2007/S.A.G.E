@@ -32,6 +32,7 @@ logs/
 *.swo
 *~
 .DS_Store
+.kiro/
 
 # Pytest / Coverage
 .pytest_cache/

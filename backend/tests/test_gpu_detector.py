@@ -1,198 +1,102 @@
-"""
-Tests for sage.models.gpu_detector — GPU hardware detection.
-
-All tests mock subprocess calls so they run on any machine (including CI
-without a GPU).
-"""
-
-import subprocess
-import pytest
+import unittest
 from unittest.mock import patch, MagicMock
+from sage.models.gpu_detector import detect_gpus, GPUStatus, GPUInfo, _parse_nvidia_smi
 
-from sage.models.gpu_detector import (
-    GPUInfo,
-    HardwareProfile,
-    _detect_nvidia,
-    detect_hardware,
-    refresh_vram,
-)
+class TestGPUDetector(unittest.TestCase):
+    def setUp(self):
+        # Reset the singleton cache before each test
+        import sage.models.gpu_detector as detector
+        detector._cached_status = None
 
+    @patch("subprocess.run")
+    def test_parse_nvidia_smi_success(self, mock_run):
+        """Test successful parsing of nvidia-smi CSV output."""
+        # We need to mock 3 subprocess calls in order: 
+        # 1. The main query
+        # 2. Driver version query
+        # 3. Header query (for CUDA version)
+        
+        main_mock = MagicMock()
+        main_mock.returncode = 0
+        main_mock.stdout = "0, NVIDIA GeForce RTX 3060, 12288, 10240\n"
+        
+        driver_mock = MagicMock()
+        driver_mock.returncode = 0
+        driver_mock.stdout = "560.35.03\n"
+        
+        header_mock = MagicMock()
+        header_mock.returncode = 0
+        header_mock.stdout = "| NVIDIA-SMI 560.35.03    Driver Version: 560.35.03    CUDA Version: 12.6  |\n"
+        
+        mock_run.side_effect = [main_mock, driver_mock, header_mock]
 
-# ── nvidia-smi mock fixtures ────────────────────────────────────────────────
+        status = _parse_nvidia_smi()
 
-NVIDIA_SMI_OUTPUT_SINGLE = (
-    "0, NVIDIA GeForce RTX 4060 Ti, 16384, 14200, 560.35.03\n"
-)
+        self.assertIsNotNone(status)
+        self.assertTrue(status.cuda_available)
+        self.assertEqual(status.gpu_count, 1)
+        self.assertEqual(status.driver_version, "560.35.03")
+        self.assertEqual(status.cuda_version, "12.6")
+        
+        gpu = status.gpus[0]
+        self.assertEqual(gpu.gpu_index, 0)
+        self.assertEqual(gpu.name, "NVIDIA GeForce RTX 3060")
+        self.assertEqual(gpu.vram_total_mb, 12288)
+        self.assertEqual(gpu.vram_free_mb, 10240)
+        self.assertEqual(gpu.driver_version, "560.35.03")
+        self.assertEqual(gpu.cuda_version, "12.6")
 
-NVIDIA_SMI_OUTPUT_MULTI = (
-    "0, NVIDIA GeForce RTX 4060 Ti, 16384, 14200, 560.35.03\n"
-    "1, NVIDIA GeForce RTX 3060, 12288, 11000, 560.35.03\n"
-)
+    @patch("subprocess.run")
+    def test_parse_nvidia_smi_not_found(self, mock_run):
+        """Test graceful fallback when nvidia-smi is not installed."""
+        mock_run.side_effect = FileNotFoundError()
+        
+        status = _parse_nvidia_smi()
+        self.assertIsNone(status)
 
+    @patch("subprocess.run")
+    def test_parse_nvidia_smi_error(self, mock_run):
+        """Test graceful fallback when nvidia-smi fails to run."""
+        mock_error = MagicMock()
+        mock_error.returncode = 1
+        mock_error.stderr = "Command not found"
+        mock_run.return_value = mock_error
+        
+        status = _parse_nvidia_smi()
+        self.assertIsNone(status)
 
-def _mock_run_nvidia(output: str, returncode: int = 0):
-    """Create a mock subprocess.run result for nvidia-smi."""
-    result = MagicMock()
-    result.returncode = returncode
-    result.stdout = output
-    result.stderr = ""
-    return result
-
-
-# ── _detect_nvidia tests ────────────────────────────────────────────────────
-
-class TestDetectNvidia:
-
-    @patch("sage.models.gpu_detector.subprocess.run")
-    def test_single_nvidia_gpu(self, mock_run):
-        mock_run.return_value = _mock_run_nvidia(NVIDIA_SMI_OUTPUT_SINGLE)
-
-        gpus = _detect_nvidia()
-
-        assert len(gpus) == 1
-        g = gpus[0]
-        assert g.vendor == "nvidia"
-        assert g.backend == "cuda"
-        assert g.device_name == "NVIDIA GeForce RTX 4060 Ti"
-        assert g.vram_total_mb == 16384
-        assert g.vram_free_mb == 14200
-        assert g.driver_version == "560.35.03"
-        assert g.device_index == 0
-
-    @patch("sage.models.gpu_detector.subprocess.run")
-    def test_multi_nvidia_gpu(self, mock_run):
-        mock_run.return_value = _mock_run_nvidia(NVIDIA_SMI_OUTPUT_MULTI)
-
-        gpus = _detect_nvidia()
-
-        assert len(gpus) == 2
-        assert gpus[0].device_index == 0
-        assert gpus[1].device_index == 1
-        assert gpus[1].vram_total_mb == 12288
-
-    @patch("sage.models.gpu_detector.subprocess.run", side_effect=FileNotFoundError)
-    def test_nvidia_smi_not_found(self, mock_run):
-        gpus = _detect_nvidia()
-        assert gpus == []
-
-    @patch("sage.models.gpu_detector.subprocess.run")
-    def test_nvidia_smi_nonzero_exit(self, mock_run):
-        mock_run.return_value = _mock_run_nvidia("", returncode=1)
-
-        gpus = _detect_nvidia()
-        assert gpus == []
-
-    @patch("sage.models.gpu_detector.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="nvidia-smi", timeout=10))
-    def test_nvidia_smi_timeout(self, mock_run):
-        gpus = _detect_nvidia()
-        assert gpus == []
-
-    @patch("sage.models.gpu_detector.subprocess.run")
-    def test_nvidia_smi_malformed_csv(self, mock_run):
-        mock_run.return_value = _mock_run_nvidia("garbage data\nmore garbage\n")
-
-        gpus = _detect_nvidia()
-        # Should not crash — just returns no valid GPUs
-        assert gpus == []
-
-
-# ── detect_hardware tests ───────────────────────────────────────────────────
-
-class TestDetectHardware:
-
-    @patch("sage.models.gpu_detector._detect_nvidia")
-    def test_auto_with_nvidia(self, mock_nvidia):
-        mock_nvidia.return_value = [
-            GPUInfo(
-                vendor="nvidia", backend="cuda",
-                device_name="RTX 4060 Ti", vram_total_mb=16384,
-                vram_free_mb=14200, driver_version="560.35", device_index=0
-            )
-        ]
-
-        hw = detect_hardware(override_backend="auto")
-
-        assert hw.selected_backend == "cuda"
-        assert hw.selected_gpu is not None
-        assert hw.selected_gpu.device_name == "RTX 4060 Ti"
-        assert hw.total_vram_mb == 16384
-
-    @patch("sage.models.gpu_detector._detect_nvidia", return_value=[])
-    def test_auto_no_gpu(self, mock_nvidia):
-        hw = detect_hardware(override_backend="auto")
-
-        assert hw.selected_backend == "cpu"
-        assert hw.selected_gpu is None
-        assert hw.total_vram_mb == 0
-
-    def test_force_cpu(self):
-        hw = detect_hardware(override_backend="cpu")
-
-        assert hw.selected_backend == "cpu"
-        assert hw.selected_gpu is None
-        assert hw.gpus == []
-
-    @patch("sage.models.gpu_detector._detect_nvidia", return_value=[])
-    def test_force_cuda_no_gpu_falls_back(self, mock_nvidia):
-        hw = detect_hardware(override_backend="cuda")
-
-        assert hw.selected_backend == "cpu"
-        assert hw.detection_error is not None
-        assert "no NVIDIA GPU" in hw.detection_error
-
-    @patch("sage.models.gpu_detector._detect_nvidia")
-    def test_selects_gpu_with_most_free_vram(self, mock_nvidia):
-        mock_nvidia.return_value = [
-            GPUInfo(vendor="nvidia", backend="cuda", device_name="RTX 3060",
-                    vram_total_mb=12288, vram_free_mb=8000, driver_version="560", device_index=0),
-            GPUInfo(vendor="nvidia", backend="cuda", device_name="RTX 4090",
-                    vram_total_mb=24576, vram_free_mb=20000, driver_version="560", device_index=1),
-        ]
-
-        hw = detect_hardware(override_backend="auto")
-
-        assert hw.selected_gpu.device_name == "RTX 4090"
-        assert hw.selected_gpu.device_index == 1
-
-
-# ── refresh_vram tests ──────────────────────────────────────────────────────
-
-class TestRefreshVram:
-
-    @patch("sage.models.gpu_detector.subprocess.run")
-    def test_refresh_updates_free_vram(self, mock_run):
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = "12000\n"
-        mock_run.return_value = result
-
-        gpu = GPUInfo(
-            vendor="nvidia", backend="cuda", device_name="RTX 4060",
-            vram_total_mb=16384, vram_free_mb=14200, driver_version="560",
-            device_index=0,
+    @patch("sage.models.gpu_detector._parse_nvidia_smi")
+    def test_detect_gpus_caching(self, mock_parse):
+        """Test that detect_gpus caches the result."""
+        mock_status = GPUStatus(
+            cuda_available=True, gpu_count=1, driver_version="1", cuda_version="1",
+            gpus=[GPUInfo(gpu_index=0, name="test", vram_total_mb=1, vram_free_mb=1, driver_version="1", cuda_version="1")]
         )
+        mock_parse.return_value = mock_status
+        
+        # First call should invoke parse
+        res1 = detect_gpus()
+        self.assertEqual(res1.cuda_available, True)
+        mock_parse.assert_called_once()
+        
+        # Second call should use cache
+        res2 = detect_gpus()
+        self.assertEqual(res2.cuda_available, True)
+        mock_parse.assert_called_once() # Call count shouldn't increase
+        
+        # Forced refresh
+        res3 = detect_gpus(force_refresh=True)
+        self.assertEqual(mock_parse.call_count, 2)
 
-        updated = refresh_vram(gpu)
+    @patch("sage.models.gpu_detector._parse_nvidia_smi")
+    def test_detect_gpus_none_fallback(self, mock_parse):
+        """Test that detect_gpus converts None from parser into a valid empty status."""
+        mock_parse.return_value = None
+        
+        status = detect_gpus(force_refresh=True)
+        self.assertFalse(status.cuda_available)
+        self.assertEqual(status.gpu_count, 0)
+        self.assertEqual(len(status.gpus), 0)
 
-        assert updated.vram_free_mb == 12000
-
-    def test_refresh_noop_for_non_nvidia(self):
-        gpu = GPUInfo(
-            vendor="amd", backend="rocm", device_name="RX 7900",
-            vram_total_mb=16384, vram_free_mb=14200, driver_version="6.0",
-            device_index=0,
-        )
-
-        updated = refresh_vram(gpu)
-        assert updated.vram_free_mb == 14200  # unchanged
-
-    @patch("sage.models.gpu_detector.subprocess.run", side_effect=Exception("fail"))
-    def test_refresh_handles_failure_gracefully(self, mock_run):
-        gpu = GPUInfo(
-            vendor="nvidia", backend="cuda", device_name="RTX 4060",
-            vram_total_mb=16384, vram_free_mb=14200, driver_version="560",
-            device_index=0,
-        )
-
-        updated = refresh_vram(gpu)
-        assert updated.vram_free_mb == 14200  # unchanged on failure
+if __name__ == "__main__":
+    unittest.main()

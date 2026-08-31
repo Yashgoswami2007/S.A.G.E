@@ -1,11 +1,11 @@
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Any
 
 class HealthResponse(BaseModel):
     status: str
     services: dict[str, str]
     models: list[dict[str, Any]]
-    gpu: Optional[dict[str, Any]] = None
+    gpu: dict[str, Any] | None = None
 
 class ErrorResponse(BaseModel):
     error: str

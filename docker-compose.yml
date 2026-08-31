@@ -14,8 +14,6 @@ services:
       - DATABASE_URL=postgresql+asyncpg://sage:sage@postgres:5432/sage
       - REDIS_URL=redis://redis:6379
       - AIRGAP_MODE=true
-      - GPU_BACKEND=auto
-      - GPU_MEMORY_RESERVE_MB=512
     volumes:
       - ./workspace:/workspace
       - ./templates:/templates
