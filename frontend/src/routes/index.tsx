@@ -1,0 +1,370 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PanelLeft, Plus } from "lucide-react";
+import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
+import { Sidebar } from "@/components/sage/Sidebar";
+import { Composer } from "@/components/sage/Composer";
+import { MessageItem } from "@/components/sage/Messages";
+import { ConnectorsDialog } from "@/components/sage/ConnectorsDialog";
+import { SageMark } from "@/components/sage/SageLogo";
+import {
+  titleFrom,
+  uid,
+  useChats,
+  useConnectors,
+  useModels,
+  type Attachment,
+  type Chat,
+  type ChatMessage,
+} from "@/lib/sage-store";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "SAGE — Your AI thinking partner" },
+      {
+        name: "description",
+        content:
+          "SAGE is an AI chat workspace with file uploads, connectors, response styles and streaming answers.",
+      },
+      { property: "og:title", content: "SAGE — Your AI thinking partner" },
+      {
+        property: "og:description",
+        content:
+          "Chat with SAGE: streaming answers, file uploads, MCP-style connectors and multiple models.",
+      },
+    ],
+  }),
+  component: SagePage,
+});
+
+const SUGGESTIONS = [
+  { label: "Write", prompt: "Help me write a short, warm launch announcement for my product." },
+  { label: "Learn", prompt: "Explain how vector databases work, with a simple analogy." },
+  { label: "Code", prompt: "Write a TypeScript debounce hook and explain the tricky parts." },
+  { label: "Plan", prompt: "Plan a focused 5-day sprint for shipping a landing page." },
+];
+
+function SagePage() {
+  const { chats, setChats, hydrated } = useChats();
+  const { connectors, toggle } = useConnectors();
+  const models = useModels();
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
+  const [model, setModel] = useState<string>("");
+  const [style, setStyle] = useState("normal");
+  const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const activeChat = useMemo(
+    () => chats.find((c) => c.id === activeId) ?? null,
+    [chats, activeId],
+  );
+  const messages = activeChat?.messages ?? [];
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) setSidebarOpen(false);
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, streaming]);
+
+  useEffect(() => {
+    if (!model && models.length > 0) {
+      setModel(models[0].id);
+    }
+  }, [models, model]);
+
+  const updateChat = useCallback(
+    (id: string, updater: (chat: Chat) => Chat) => {
+      setChats(
+        chatsRef.current.map((c) => (c.id === id ? { ...updater(c), updatedAt: Date.now() } : c)),
+      );
+    },
+    [setChats],
+  );
+
+  // keep a ref of latest chats so streaming updates don't stale-close
+  const chatsRef = useRef<Chat[]>(chats);
+  chatsRef.current = chats;
+
+  const run = useCallback(
+    async (chatId: string, history: ChatMessage[]) => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setStreaming(true);
+
+      const assistantId = uid();
+      updateChat(chatId, (chat) => ({
+        ...chat,
+        messages: [
+          ...history,
+          { id: assistantId, role: "assistant", content: "", createdAt: Date.now() },
+        ],
+      }));
+
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            style,
+            connectors: connectors.filter((c) => c.enabled).map((c) => c.name),
+            messages: history.map((m) => toApiMessage(m)),
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          const detail = await response.text().catch(() => "");
+          if (response.status === 429) toast.error("Rate limit reached — try again in a moment.");
+          else if (response.status === 402) toast.error("AI credits exhausted. Add credits to continue.");
+          else toast.error(detail || "SAGE could not respond.");
+          updateChat(chatId, (chat) => ({
+            ...chat,
+            messages: chat.messages.filter((m) => m.id !== assistantId),
+          }));
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let acc = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          updateChat(chatId, (chat) => ({
+            ...chat,
+            messages: chat.messages.map((m) =>
+              m.id === assistantId ? { ...m, content: acc } : m,
+            ),
+          }));
+        }
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") toast.error("Connection interrupted.");
+      } finally {
+        setStreaming(false);
+        abortRef.current = null;
+      }
+    },
+    [connectors, model, style, updateChat],
+  );
+
+  const send = useCallback(
+    (text: string, attachments: Attachment[]) => {
+      const userMessage: ChatMessage = {
+        id: uid(),
+        role: "user",
+        content: text,
+        attachments,
+        createdAt: Date.now(),
+      };
+
+      let chatId = activeId;
+      if (!chatId || !chatsRef.current.some((c) => c.id === chatId)) {
+        chatId = uid();
+        const chat: Chat = {
+          id: chatId,
+          title: titleFrom(text || attachments[0]?.name || "New chat"),
+          messages: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        const next = [chat, ...chatsRef.current];
+        chatsRef.current = next;
+        setChats(next);
+        setActiveId(chatId);
+      }
+
+      const current = chatsRef.current.find((c) => c.id === chatId);
+      const history = [...(current?.messages ?? []), userMessage];
+      updateChat(chatId, (chat) => ({
+        ...chat,
+        title: chat.messages.length === 0 ? titleFrom(text || userMessage.attachments?.[0]?.name || "New chat") : chat.title,
+        messages: history,
+      }));
+      void run(chatId, history);
+    },
+    [activeId, run, setChats, updateChat],
+  );
+
+  const retry = useCallback(() => {
+    if (!activeChat) return;
+    const trimmed = [...activeChat.messages];
+    while (trimmed.length && trimmed[trimmed.length - 1]?.role === "assistant") trimmed.pop();
+    if (!trimmed.length) return;
+    updateChat(activeChat.id, (chat) => ({ ...chat, messages: trimmed }));
+    void run(activeChat.id, trimmed);
+  }, [activeChat, run, updateChat]);
+
+  const newChat = useCallback(() => {
+    abortRef.current?.abort();
+    setActiveId(null);
+  }, []);
+
+  const deleteChat = useCallback(
+    (id: string) => {
+      const next = chatsRef.current.filter((c) => c.id !== id);
+      chatsRef.current = next;
+      setChats(next);
+      if (activeId === id) setActiveId(null);
+    },
+    [activeId, setChats],
+  );
+
+  const connectedCount = connectors.filter((c) => c.enabled).length;
+
+  return (
+    <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+      <Sidebar
+        chats={hydrated ? chats : []}
+        activeId={activeId}
+        onSelect={(id) => {
+          abortRef.current?.abort();
+          setActiveId(id);
+          if (typeof window !== "undefined" && window.innerWidth < 768) setSidebarOpen(false);
+        }}
+        onNew={newChat}
+        onDelete={deleteChat}
+        onOpenConnectors={() => setConnectorsOpen(true)}
+        open={sidebarOpen}
+        onToggle={() => setSidebarOpen((v) => !v)}
+      />
+
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-2 px-3 py-2.5">
+          {!sidebarOpen && (
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSidebarOpen(true)}>
+              <PanelLeft className="h-4 w-4" />
+            </Button>
+          )}
+          <p className="truncate font-serif text-sm text-muted-foreground">
+            {activeChat?.title ?? "New chat"}
+          </p>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto h-8 w-8"
+            aria-label="New chat"
+            onClick={newChat}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </header>
+
+        {messages.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center px-4">
+            <div className="w-full max-w-2xl">
+              <div className="mb-6 flex items-center justify-center gap-3">
+                <SageMark className="h-7 w-7 text-primary" />
+                <h1 className="font-serif text-3xl tracking-tight">Good to see you</h1>
+              </div>
+              <Composer
+                onSend={send}
+                onStop={() => abortRef.current?.abort()}
+                streaming={streaming}
+                models={models}
+                model={model || (models[0]?.id ?? "")}
+                onModelChange={setModel}
+                style={style}
+                onStyleChange={setStyle}
+                onOpenConnectors={() => setConnectorsOpen(true)}
+                connectedCount={connectedCount}
+              />
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.label}
+                    type="button"
+                    onClick={() => send(s.prompt, [])}
+                    className="rounded-full border border-border bg-card px-3.5 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-3xl space-y-7 px-4 py-6">
+                {messages.map((message, index) => (
+                  <MessageItem
+                    key={message.id}
+                    message={message}
+                    streaming={streaming && index === messages.length - 1}
+                    onRetry={
+                      message.role === "assistant" && index === messages.length - 1
+                        ? retry
+                        : undefined
+                    }
+                  />
+                ))}
+                <div ref={bottomRef} />
+              </div>
+            </div>
+            <div className="px-4 pb-4">
+              <div className="mx-auto w-full max-w-3xl">
+                <Composer
+                  compact
+                  onSend={send}
+                  onStop={() => abortRef.current?.abort()}
+                  streaming={streaming}
+                  models={models}
+                  model={model || (models[0]?.id ?? "")}
+                  onModelChange={setModel}
+                  style={style}
+                  onStyleChange={setStyle}
+                  onOpenConnectors={() => setConnectorsOpen(true)}
+                  connectedCount={connectedCount}
+                />
+                <p className="mt-2 text-center text-xs text-muted-foreground">
+                  SAGE can make mistakes. Please double-check responses.
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+
+      <ConnectorsDialog
+        open={connectorsOpen}
+        onOpenChange={setConnectorsOpen}
+        connectors={connectors}
+        onToggle={toggle}
+      />
+      <Toaster />
+    </div>
+  );
+}
+
+function toApiMessage(message: ChatMessage) {
+  const images = (message.attachments ?? []).filter((a) => a.kind === "image");
+  const texts = (message.attachments ?? []).filter((a) => a.kind === "text");
+  const textBody = [
+    message.content,
+    ...texts.map((t) => `\n\n--- File: ${t.name} ---\n${t.data.slice(0, 20000)}`),
+  ]
+    .filter(Boolean)
+    .join("");
+
+  if (images.length === 0) {
+    return { role: message.role, content: textBody || "(empty message)" };
+  }
+
+  return {
+    role: message.role,
+    content: [
+      { type: "text", text: textBody || "Please look at the attached image(s)." },
+      ...images.map((img) => ({ type: "image_url", image_url: { url: img.data } })),
+    ],
+  };
+}
