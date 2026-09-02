@@ -162,6 +162,16 @@ class ReActExecutor:
                     trace=trace
                 )
         
+        if plan and (len(plan.steps) > 1 or (len(plan.steps) == 1 and plan.steps[0].tool_name)):
+            plan_created_event = TraceEvent(
+                task_id=task_id,
+                agent_state=AgentState.PLANNING,
+                profile=profile.name,
+                selected_model=model_config.id,
+                tool_args={"plan": plan.model_dump()}
+            )
+            await emit(plan_created_event)
+
         final_output = ""
         current_step_idx = 0
         step_retry_count = 0
@@ -299,7 +309,7 @@ class ReActExecutor:
                             agent_state=AgentState.OBSERVING,
                             profile=profile.name,
                             selected_model=model_config.id,
-                            reflection=token  # using reflection field to carry the token
+                            token=token
                         )
                         await stream_callback(token_event)
                 else:

@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { STYLES, uid, type Attachment } from "@/lib/sage-store";
+import { PROFILES } from "@/routes/index";
 import { toast } from "sonner";
 
 const MAX_BYTES = 4 * 1024 * 1024;
@@ -34,6 +35,8 @@ export function Composer({
   onModelChange,
   style,
   onStyleChange,
+  profile,
+  onProfileChange,
   onOpenConnectors,
   connectedCount,
   compact,
@@ -46,6 +49,8 @@ export function Composer({
   onModelChange: (id: string) => void;
   style: string;
   onStyleChange: (id: string) => void;
+  profile: string;
+  onProfileChange: (id: string) => void;
   onOpenConnectors: () => void;
   connectedCount: number;
   compact?: boolean;
@@ -181,6 +186,26 @@ export function Composer({
                   <div>
                     <p className="text-sm">{s.name}</p>
                     <p className="text-xs text-muted-foreground">{s.blurb}</p>
+                  </div>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 gap-1 rounded-full px-2.5 text-xs">
+                {PROFILES.find(p => p.id === profile)?.name || "Auto"}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-60">
+              <DropdownMenuLabel>Agent Profile</DropdownMenuLabel>
+              {PROFILES.map((p) => (
+                <DropdownMenuItem key={p.id} onSelect={() => onProfileChange(p.id)}>
+                  <div>
+                    <p className="text-sm">{p.name}</p>
+                    <p className="text-xs text-muted-foreground">{p.blurb}</p>
                   </div>
                 </DropdownMenuItem>
               ))}

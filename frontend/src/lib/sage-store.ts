@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { AgentEvent } from "./agent-events";
 
 export type Attachment = {
   id: string;
@@ -10,18 +11,32 @@ export type Attachment = {
   kind: "image" | "text";
 };
 
+export type ServerAttachment = {
+  path: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   attachments?: Attachment[];
+  events?: AgentEvent[];
   createdAt: number;
+};
+
+export type GrantedPath = {
+  id: string;
+  path: string;
+  permission: "read" | "readwrite";
+  grantedAt: number;
+  label: string;
 };
 
 export type Chat = {
   id: string;
   title: string;
   messages: ChatMessage[];
+  grantedPaths?: GrantedPath[];
   createdAt: number;
   updatedAt: number;
 };
@@ -91,12 +106,25 @@ function read<T>(key: string, fallback: T): T {
   }
 }
 
-function write(key: string, value: unknown) {
+let writeTimeouts: Record<string, any> = {};
+
+function write(key: string, value: unknown, immediate: boolean = false) {
   if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* quota */
+  if (writeTimeouts[key]) {
+    clearTimeout(writeTimeouts[key]);
+    delete writeTimeouts[key];
+  }
+  const doWrite = () => {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* quota */
+    }
+  };
+  if (immediate) {
+    doWrite();
+  } else {
+    writeTimeouts[key] = setTimeout(doWrite, 150);
   }
 }
 
@@ -115,6 +143,10 @@ export function useChats() {
   }, []);
 
   return { chats, setChats: persist, hydrated };
+}
+
+export function flushChats(chats: Chat[]) {
+  write(CHATS_KEY, chats, true);
 }
 
 export function useConnectors() {

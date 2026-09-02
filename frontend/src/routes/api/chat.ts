@@ -7,14 +7,9 @@ type Body = {
   messages?: Msg[];
   model?: string;
   style?: string;
+  profile?: string;
   connectors?: string[];
-};
-
-const STYLES: Record<string, string> = {
-  normal: "Respond in your default, balanced voice.",
-  concise: "Respond concisely, with fewer words and no filler.",
-  explanatory: "Respond in an educational tone, explaining concepts along the way.",
-  formal: "Respond in clear, polished, professional prose.",
+  granted_paths?: any[];
 };
 
 export const Route = createFileRoute("/api/chat")({
@@ -27,21 +22,30 @@ export const Route = createFileRoute("/api/chat")({
           return new Response("Messages are required", { status: 400 });
         }
 
-        const connectors = body.connectors?.length
-          ? `\nThe user has these connectors enabled: ${body.connectors.join(", ")}. You cannot call them live yet — if a request needs one, say what you would fetch from it.`
-          : "";
+        // We use the most recent user message as the prompt for the agent
+        const lastMessage = messages[messages.length - 1]!;
+        let prompt = "";
+        let file_attachments: string[] = [];
 
-        const system = `You are SAGE, a thoughtful, helpful AI assistant. You are direct, warm and precise. Use markdown for structure and fenced code blocks with language tags for code.${connectors}\n${STYLES[body.style ?? "normal"] ?? ""}`;
+        if (typeof lastMessage.content === "string") {
+          prompt = lastMessage.content;
+        } else if (Array.isArray(lastMessage.content)) {
+          const textParts = lastMessage.content.filter(p => p.type === "text").map(p => (p as any).text);
+          prompt = textParts.join("\n");
+          // TODO: handle images properly if sending to agent backend
+        }
 
-        const upstream = await fetch("http://127.0.0.1:8001/v1/chat/completions", {
+        const upstream = await fetch("http://127.0.0.1:8000/api/chat/stream", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: body.model || "default",
-            stream: true,
-            messages: [{ role: "system", content: system }, ...messages],
+            prompt: prompt,
+            profile: body.profile || "general",
+            style: body.style || "normal",
+            granted_paths: body.granted_paths,
+            file_attachments: file_attachments
           }),
         });
 
@@ -50,65 +54,12 @@ export const Route = createFileRoute("/api/chat")({
           return new Response(text || "Upstream error", { status: upstream.status || 500 });
         }
 
-        const encoder = new TextEncoder();
-        const decoder = new TextDecoder();
-        const reader = upstream.body.getReader();
-
-        let buffer = "";
-        let inReasoning = false;
-
-        const stream = new ReadableStream<Uint8Array>({
-          async pull(controller) {
-            const { done, value } = await reader.read();
-            if (done) {
-              if (inReasoning) {
-                controller.enqueue(encoder.encode("</think>\n\n"));
-              }
-              controller.close();
-              return;
-            }
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith("data:")) continue;
-              const payload = trimmed.slice(5).trim();
-              if (payload === "[DONE]") continue;
-              try {
-                const json = JSON.parse(payload);
-                const delta = json?.choices?.[0]?.delta;
-                if (delta) {
-                  let text = "";
-                  if (delta.reasoning_content) {
-                    if (!inReasoning) {
-                      inReasoning = true;
-                      text += "<think>\n";
-                    }
-                    text += delta.reasoning_content;
-                  } else if (delta.content !== undefined && delta.content !== null) {
-                    if (inReasoning) {
-                      inReasoning = false;
-                      text += "\n</think>\n\n";
-                    }
-                    text += delta.content;
-                  }
-                  if (text) controller.enqueue(encoder.encode(text));
-                }
-              } catch {
-                // partial chunk; ignored
-              }
-            }
-          },
-          cancel() {
-            void reader.cancel();
-          },
-        });
-
-        return new Response(stream, {
+        // Just pass through the SSE stream as-is
+        return new Response(upstream.body, {
           headers: {
-            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
           },
         });
       },

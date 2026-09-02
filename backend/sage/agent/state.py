@@ -30,6 +30,7 @@ class TraceEvent(BaseModel):
     retry_count: int = 0
     error: Optional[str] = None
     reflection: Optional[str] = None
+    token: Optional[str] = None
 
 class ExecutionTrace(BaseModel):
     task_id: str

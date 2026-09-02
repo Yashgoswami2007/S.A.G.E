@@ -15,6 +15,7 @@ sage/api/__init__.py
 sage/api/admin.py
 sage/api/auth.py
 sage/api/chat.py
+sage/api/events.py
 sage/api/health.py
 sage/api/tasks.py
 sage/audit/__init__.py

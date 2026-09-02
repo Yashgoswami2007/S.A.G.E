@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { parseAgentEvent } from "@/lib/agent-events";
 import { PanelLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -10,6 +11,7 @@ import { MessageItem } from "@/components/sage/Messages";
 import { ConnectorsDialog } from "@/components/sage/ConnectorsDialog";
 import { SageMark } from "@/components/sage/SageLogo";
 import {
+  flushChats,
   titleFrom,
   uid,
   useChats,
@@ -47,6 +49,15 @@ const SUGGESTIONS = [
   { label: "Plan", prompt: "Plan a focused 5-day sprint for shipping a landing page." },
 ];
 
+export const PROFILES = [
+  { id: "auto", name: "Auto", blurb: "Auto-detect from prompt" },
+  { id: "general", name: "General", blurb: "General purpose agent" },
+  { id: "coder", name: "Coder", blurb: "Writes and runs code" },
+  { id: "analyst", name: "Analyst", blurb: "Data and spreadsheet analysis" },
+  { id: "inspector", name: "Inspector", blurb: "Diagrams and OCR" },
+  { id: "documentor", name: "Documentor", blurb: "Generates reports and docs" }
+];
+
 function SagePage() {
   const { chats, setChats, hydrated } = useChats();
   const { connectors, toggle } = useConnectors();
@@ -56,6 +67,7 @@ function SagePage() {
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [model, setModel] = useState<string>("");
   const [style, setStyle] = useState("normal");
+  const [profile, setProfile] = useState("auto");
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -70,31 +82,38 @@ function SagePage() {
     if (typeof window !== "undefined" && window.innerWidth < 768) setSidebarOpen(false);
   }, []);
 
+  const lastMessageContent = messages[messages.length - 1]?.content;
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streaming]);
+    if (streaming && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: "auto" });
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages.length, streaming, lastMessageContent]);
 
   useEffect(() => {
     if (!model && models.length > 0) {
-      setModel(models[0].id);
+      setModel(models[0]!.id);
     }
   }, [models, model]);
 
   const updateChat = useCallback(
     (id: string, updater: (chat: Chat) => Chat) => {
-      setChats(
-        chatsRef.current.map((c) => (c.id === id ? { ...updater(c), updatedAt: Date.now() } : c)),
-      );
+      const next = chatsRef.current.map((c) => (c.id === id ? { ...updater(c), updatedAt: Date.now() } : c));
+      chatsRef.current = next;
+      setChats(next);
     },
     [setChats],
   );
 
   // keep a ref of latest chats so streaming updates don't stale-close
   const chatsRef = useRef<Chat[]>(chats);
-  chatsRef.current = chats;
+  useEffect(() => {
+    chatsRef.current = chats;
+  }, [chats]);
 
   const run = useCallback(
-    async (chatId: string, history: ChatMessage[]) => {
+    async (chatId: string, history: ChatMessage[], resolvedProfile: string) => {
       const controller = new AbortController();
       abortRef.current = controller;
       setStreaming(true);
@@ -104,7 +123,7 @@ function SagePage() {
         ...chat,
         messages: [
           ...history,
-          { id: assistantId, role: "assistant", content: "", createdAt: Date.now() },
+          { id: assistantId, role: "assistant", content: "", events: [], createdAt: Date.now() },
         ],
       }));
 
@@ -116,6 +135,7 @@ function SagePage() {
           body: JSON.stringify({
             model,
             style,
+            profile: resolvedProfile,
             connectors: connectors.filter((c) => c.enabled).map((c) => c.name),
             messages: history.map((m) => toApiMessage(m)),
           }),
@@ -136,22 +156,66 @@ function SagePage() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let acc = "";
+        
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
           acc += decoder.decode(value, { stream: true });
-          updateChat(chatId, (chat) => ({
-            ...chat,
-            messages: chat.messages.map((m) =>
-              m.id === assistantId ? { ...m, content: acc } : m,
-            ),
-          }));
+          
+          const lines = acc.split("\n");
+          acc = lines.pop() ?? "";
+          
+          let chunkTokens = "";
+          const chunkEvents: AgentEvent[] = [];
+
+          for (const line of lines) {
+            const event = parseAgentEvent(line);
+            if (!event) continue;
+            if (event.type === "TOKEN") {
+              chunkTokens += event.token;
+            } else {
+              chunkEvents.push(event);
+            }
+          }
+
+          if (chunkTokens || chunkEvents.length > 0) {
+            updateChat(chatId, (chat) => ({
+              ...chat,
+              messages: chat.messages.map((m) => {
+                if (m.id !== assistantId) return m;
+                let newContent = m.content || "";
+                if (chunkTokens) {
+                  newContent += chunkTokens;
+                }
+                let newEvents = [...(m.events || [])];
+                for (const evt of chunkEvents) {
+                  if (evt.type === "FINAL") {
+                    if (!newContent) {
+                      newContent = evt.content;
+                    }
+                    newEvents.push(evt);
+                  } else if (evt.type === "CONFIRMATION_REQUIRED") {
+                    fetch("/api/chat/confirm", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ request_id: evt.request_id, approved: true })
+                    }).catch(console.error);
+                    newEvents.push(evt);
+                  } else {
+                    newEvents.push(evt);
+                  }
+                }
+                return { ...m, content: newContent, events: newEvents };
+              }),
+            }));
+          }
         }
       } catch (error) {
         if ((error as Error).name !== "AbortError") toast.error("Connection interrupted.");
       } finally {
         setStreaming(false);
         abortRef.current = null;
+        flushChats(chatsRef.current);
       }
     },
     [connectors, model, style, updateChat],
@@ -166,6 +230,16 @@ function SagePage() {
         attachments,
         createdAt: Date.now(),
       };
+
+      let resolvedProfile = profile;
+      if (profile === "auto") {
+        const lower = text.toLowerCase();
+        if (attachments.some((a) => a.kind === "image")) resolvedProfile = "inspector";
+        else if (lower.includes("code") || lower.includes("python") || lower.includes("script") || lower.includes("bug")) resolvedProfile = "coder";
+        else if (lower.includes("excel") || lower.includes("csv") || lower.includes("data") || lower.includes("calculate")) resolvedProfile = "analyst";
+        else if (lower.includes("report") || lower.includes("doc") || lower.includes("ppt")) resolvedProfile = "documentor";
+        else resolvedProfile = "general";
+      }
 
       let chatId = activeId;
       if (!chatId || !chatsRef.current.some((c) => c.id === chatId)) {
@@ -190,9 +264,9 @@ function SagePage() {
         title: chat.messages.length === 0 ? titleFrom(text || userMessage.attachments?.[0]?.name || "New chat") : chat.title,
         messages: history,
       }));
-      void run(chatId, history);
+      void run(chatId, history, resolvedProfile);
     },
-    [activeId, run, setChats, updateChat],
+    [activeId, run, setChats, updateChat, profile],
   );
 
   const retry = useCallback(() => {
@@ -201,8 +275,10 @@ function SagePage() {
     while (trimmed.length && trimmed[trimmed.length - 1]?.role === "assistant") trimmed.pop();
     if (!trimmed.length) return;
     updateChat(activeChat.id, (chat) => ({ ...chat, messages: trimmed }));
-    void run(activeChat.id, trimmed);
-  }, [activeChat, run, updateChat]);
+    
+    // Simplistic retry using current profile setting or general
+    void run(activeChat.id, trimmed, profile === "auto" ? "general" : profile);
+  }, [activeChat, run, updateChat, profile]);
 
   const newChat = useCallback(() => {
     abortRef.current?.abort();
@@ -275,6 +351,8 @@ function SagePage() {
                 onModelChange={setModel}
                 style={style}
                 onStyleChange={setStyle}
+                profile={profile}
+                onProfileChange={setProfile}
                 onOpenConnectors={() => setConnectorsOpen(true)}
                 connectedCount={connectedCount}
               />
@@ -301,11 +379,7 @@ function SagePage() {
                     key={message.id}
                     message={message}
                     streaming={streaming && index === messages.length - 1}
-                    onRetry={
-                      message.role === "assistant" && index === messages.length - 1
-                        ? retry
-                        : undefined
-                    }
+                    {...(message.role === "assistant" && index === messages.length - 1 ? { onRetry: retry } : {})}
                   />
                 ))}
                 <div ref={bottomRef} />
@@ -323,6 +397,8 @@ function SagePage() {
                   onModelChange={setModel}
                   style={style}
                   onStyleChange={setStyle}
+                  profile={profile}
+                  onProfileChange={setProfile}
                   onOpenConnectors={() => setConnectorsOpen(true)}
                   connectedCount={connectedCount}
                 />
