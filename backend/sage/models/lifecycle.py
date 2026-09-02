@@ -11,7 +11,7 @@ logger = structlog.get_logger(__name__)
 
 # Resolve the llama-server binary path once at import time.
 # Checks PATH first; if not found, falls back to the known Windows install location.
-_LLAMA_SERVER_FALLBACK = r"C:\llama-b10679-bin-win-cuda-13.3-x64\llama-server.exe"
+_LLAMA_SERVER_FALLBACK = r"C:\llama-cuda\llama-server.exe"
 
 def _resolve_llama_server() -> str:
     """Return the absolute path to llama-server, searching PATH then known fallbacks."""

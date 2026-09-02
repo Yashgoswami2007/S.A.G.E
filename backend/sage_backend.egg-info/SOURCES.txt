@@ -34,6 +34,7 @@ sage/docgen/__init__.py
 sage/models/__init__.py
 sage/models/circuit_breaker.py
 sage/models/client.py
+sage/models/gpu_detector.py
 sage/models/health.py
 sage/models/lifecycle.py
 sage/models/registry.py
@@ -52,6 +53,7 @@ sage_backend.egg-info/requires.txt
 sage_backend.egg-info/top_level.txt
 tests/test_agent_executor.py
 tests/test_circuit_breaker.py
+tests/test_gpu_detector.py
 tests/test_lifecycle.py
 tests/test_router.py
 tests/test_tools.py
