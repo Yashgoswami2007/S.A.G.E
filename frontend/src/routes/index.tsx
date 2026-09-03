@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseAgentEvent } from "@/lib/agent-events";
+import { parseAgentEvent, type AgentEvent } from "@/lib/agent-events";
 import { PanelLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
@@ -157,20 +157,20 @@ function SagePage() {
         const decoder = new TextDecoder();
         let acc = "";
         
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          acc += decoder.decode(value, { stream: true });
-          
-          const lines = acc.split("\n");
-          acc = lines.pop() ?? "";
-          
+        const processLines = (linesToProcess: string[]) => {
           let chunkTokens = "";
           const chunkEvents: AgentEvent[] = [];
 
-          for (const line of lines) {
+          for (const line of linesToProcess) {
+            if (!line.trim()) continue;
+            console.log("[FRONTEND] raw SSE event received:", line);
             const event = parseAgentEvent(line);
-            if (!event) continue;
+            if (!event) {
+              console.log("[FRONTEND] parsing failed or event was ignored");
+              continue;
+            }
+            console.log("[FRONTEND] parsed event.type:", event.type);
+            
             if (event.type === "TOKEN") {
               chunkTokens += event.token;
             } else {
@@ -190,9 +190,8 @@ function SagePage() {
                 let newEvents = [...(m.events || [])];
                 for (const evt of chunkEvents) {
                   if (evt.type === "FINAL") {
-                    if (!newContent) {
-                      newContent = evt.content;
-                    }
+                    console.log("[FRONTEND] FINAL content:", evt.content);
+                    newContent = evt.content; // ALWAYS treat FINAL as authoritative
                     newEvents.push(evt);
                   } else if (evt.type === "CONFIRMATION_REQUIRED") {
                     fetch("/api/chat/confirm", {
@@ -205,9 +204,26 @@ function SagePage() {
                     newEvents.push(evt);
                   }
                 }
+                console.log("[FRONTEND] accumulated content length:", newContent.length);
                 return { ...m, content: newContent, events: newEvents };
               }),
             }));
+          }
+        };
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (value) {
+            acc += decoder.decode(value, { stream: true });
+            const lines = acc.split(/\r?\n/);
+            acc = lines.pop() ?? "";
+            processLines(lines);
+          }
+          if (done) {
+            if (acc) {
+              processLines([acc]);
+            }
+            break;
           }
         }
       } catch (error) {

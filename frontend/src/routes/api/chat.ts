@@ -35,6 +35,7 @@ export const Route = createFileRoute("/api/chat")({
           // TODO: handle images properly if sending to agent backend
         }
 
+        console.log("[PROXY] Sending upstream request to /api/chat/stream...");
         const upstream = await fetch("http://127.0.0.1:8000/api/chat/stream", {
           method: "POST",
           headers: {
@@ -51,16 +52,33 @@ export const Route = createFileRoute("/api/chat")({
 
         if (!upstream.ok || !upstream.body) {
           const text = await upstream.text().catch(() => "");
+          console.error("[PROXY] Upstream error:", upstream.status, text);
           return new Response(text || "Upstream error", { status: upstream.status || 500 });
         }
 
-        // Just pass through the SSE stream as-is
-        return new Response(upstream.body, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
-          },
+        console.log("[PROXY] Upstream stream initiated successfully. Forwarding...");
+
+        const { readable, writable } = new TransformStream({
+          transform(chunk, controller) {
+            console.log("[PROXY] upstream event received, length:", chunk.length);
+            console.log("[PROXY] event forwarded");
+            controller.enqueue(chunk);
+          }
+        });
+
+        upstream.body.pipeTo(writable).catch((err: Error) => {
+          console.error("[PROXY] pipe error:", err);
+        });
+
+        const headers = new Headers();
+        headers.set("Content-Type", "text/event-stream");
+        headers.set("Cache-Control", "no-cache");
+        headers.set("Connection", "keep-alive");
+        headers.set("X-Accel-Buffering", "no");
+
+        return new Response(readable, {
+          status: upstream.status,
+          headers: headers,
         });
       },
     },

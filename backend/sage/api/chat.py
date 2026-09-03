@@ -86,6 +86,9 @@ async def chat_stream(req: StreamRequest, request: Request):
         async def stream_callback(trace_event: TraceEvent):
             agent_event = trace_to_event(trace_event)
             if agent_event:
+                if getattr(agent_event, "type", "") == "TOKEN":
+                    print(f"[BACKEND] token generated: {repr(getattr(agent_event, 'token', ''))}")
+                print(f"[BACKEND] SSE event emitted: {getattr(agent_event, 'type', '')}")
                 await queue.put(sse_encode(agent_event))
             
             # Handle approval wait
