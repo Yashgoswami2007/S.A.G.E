@@ -1,7 +1,10 @@
 import yaml
 import os
+import logging
 from pydantic import BaseModel
 from typing import List, Optional
+
+logger = logging.getLogger("sage.registry")
 
 # Project root: registry.py lives at backend/sage/models/registry.py
 # so root is 3 levels up
@@ -31,12 +34,33 @@ class ModelRegistry:
         
     def _load_registry(self, path: str):
         if not os.path.exists(path):
+            logger.warning(
+                "Model registry file not found at '%s'. "
+                "Continuing with no registered models — the router will use its hardcoded fallback.",
+                path,
+            )
             return
-        with open(path, "r") as f:
-            data = yaml.safe_load(f)
+        try:
+            with open(path, "r") as f:
+                data = yaml.safe_load(f)
+        except Exception as exc:
+            logger.warning(
+                "Failed to read/parse model registry '%s': %s. "
+                "Continuing with no registered models — the router will use its hardcoded fallback.",
+                path, exc,
+            )
+            return
             
-        if data and "models" in data:
-            for m in data["models"]:
+        if not data or "models" not in data:
+            logger.warning(
+                "Model registry '%s' is empty or missing 'models' key. "
+                "Continuing with no registered models.",
+                path,
+            )
+            return
+
+        for idx, m in enumerate(data["models"]):
+            try:
                 model_config = ModelConfig(**m)
                 # Resolve relative model_path to absolute using project root
                 # so llama-server can be launched from any working directory
@@ -45,6 +69,11 @@ class ModelRegistry:
                         os.path.join(_PROJECT_ROOT, model_config.model_path)
                     )
                 self.models[model_config.id] = model_config
+            except Exception as exc:
+                logger.warning(
+                    "Skipping invalid model entry #%d in '%s': %s",
+                    idx, path, exc,
+                )
                 
     def get_by_capability(self, capability: str) -> Optional[ModelConfig]:
         """Finds the highest priority model with the given capability (regardless of status)."""

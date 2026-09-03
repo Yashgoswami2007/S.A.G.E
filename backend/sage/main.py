@@ -19,13 +19,32 @@ from sage.models.registry import ModelRegistry
 
 logger = logging.getLogger("sage")
 
-# Initialize ModelLifecycleManager with its own registry instance
-lifecycle_manager = ModelLifecycleManager(ModelRegistry(settings.MODEL_REGISTRY_PATH))
+# Initialize ModelLifecycleManager — tolerant of missing/corrupt registry files.
+# If the registry can't be loaded, the manager is still created (with an empty
+# registry) and the router's hardcoded fallback model will serve requests.
+try:
+    lifecycle_manager = ModelLifecycleManager(ModelRegistry(settings.MODEL_REGISTRY_PATH))
+except Exception as exc:
+    logger.warning(
+        "Failed to initialise ModelLifecycleManager: %s. "
+        "The server will start without managed models — LLM responses will use the router fallback.",
+        exc,
+    )
+    # Create a lifecycle manager with an empty registry so the rest of the app doesn't NPE
+    lifecycle_manager = ModelLifecycleManager(ModelRegistry.__new__(ModelRegistry))
+    lifecycle_manager.registry.models = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting SAGE backend (Phase 2a Model Serving active)...")
-    await lifecycle_manager.start_all()
+    try:
+        await lifecycle_manager.start_all()
+    except Exception as exc:
+        logger.warning(
+            "Model startup failed: %s. "
+            "Continuing without model servers — the router will use its hardcoded fallback.",
+            exc,
+        )
     yield
     logger.info("Shutting down SAGE backend...")
     await lifecycle_manager.stop_all()

@@ -14,6 +14,10 @@ from sage.api.tasks import store_task_result
 from sage.agent.state import TraceEvent, AgentState
 from sage.api.events import trace_to_event, sse_encode, FinalEvent, ErrorEvent
 
+import logging
+
+chat_logger = logging.getLogger("sage.chat")
+
 router = APIRouter()
 
 # Shared dependencies (stateless, safe to create once)
@@ -33,7 +37,16 @@ def _get_executor(request: Request) -> ReActExecutor:
     """
     global _executor
     if _executor is None:
-        model_registry = ModelRegistry(settings.MODEL_REGISTRY_PATH)
+        try:
+            model_registry = ModelRegistry(settings.MODEL_REGISTRY_PATH)
+        except Exception as exc:
+            chat_logger.warning(
+                "Failed to load model registry: %s. "
+                "Using empty registry — the router will use its hardcoded fallback.",
+                exc,
+            )
+            model_registry = ModelRegistry.__new__(ModelRegistry)
+            model_registry.models = {}
         model_router = ModelRouter(model_registry)
         lifecycle_mgr = getattr(request.app.state, "lifecycle_manager", None)
         _executor = ReActExecutor(

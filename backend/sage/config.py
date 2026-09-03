@@ -2,6 +2,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 import yaml
 import os
+import logging
+
+_config_logger = logging.getLogger("sage.config")
 
 # Absolute path to the directory that contains this file (backend/sage/)
 # Used to anchor relative paths so they work regardless of where uvicorn is launched from.
@@ -47,11 +50,23 @@ class Settings(BaseSettings):
         if not os.path.isabs(yaml_path):
             yaml_path = os.path.join(_PROJECT_ROOT, yaml_path)
         if not os.path.exists(yaml_path):
+            _config_logger.info(
+                "Config file '%s' not found — using default settings.", yaml_path
+            )
             instance = cls()
             instance = cls._resolve_paths(instance)
             return instance
-        with open(yaml_path, "r") as f:
-            yaml_config = yaml.safe_load(f) or {}
+        try:
+            with open(yaml_path, "r") as f:
+                yaml_config = yaml.safe_load(f) or {}
+        except Exception as exc:
+            _config_logger.warning(
+                "Failed to read/parse config '%s': %s. Using default settings.",
+                yaml_path, exc,
+            )
+            instance = cls()
+            instance = cls._resolve_paths(instance)
+            return instance
         # Strip Docker-style absolute paths that don't exist locally
         # so we fall through to the project-root-relative default
         registry_path = yaml_config.get("MODEL_REGISTRY_PATH", "")
