@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as ApiModelsRouteImport } from './routes/api/models'
+import { Route as ApiChatConfirmRouteImport } from './routes/api/chat.confirm'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,34 +29,42 @@ const ApiModelsRoute = ApiModelsRouteImport.update({
   path: '/api/models',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiChatConfirmRoute = ApiChatConfirmRouteImport.update({
+  id: '/confirm',
+  path: '/confirm',
+  getParentRoute: () => ApiChatRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/api/chat': typeof ApiChatRoute
+  '/api/chat': typeof ApiChatRouteWithChildren
   '/api/models': typeof ApiModelsRoute
+  '/api/chat/confirm': typeof ApiChatConfirmRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/api/chat': typeof ApiChatRoute
+  '/api/chat': typeof ApiChatRouteWithChildren
   '/api/models': typeof ApiModelsRoute
+  '/api/chat/confirm': typeof ApiChatConfirmRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/api/chat': typeof ApiChatRoute
+  '/api/chat': typeof ApiChatRouteWithChildren
   '/api/models': typeof ApiModelsRoute
+  '/api/chat/confirm': typeof ApiChatConfirmRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/chat' | '/api/models'
+  fullPaths: '/' | '/api/chat' | '/api/models' | '/api/chat/confirm'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/chat' | '/api/models'
-  id: '__root__' | '/' | '/api/chat' | '/api/models'
+  to: '/' | '/api/chat' | '/api/models' | '/api/chat/confirm'
+  id: '__root__' | '/' | '/api/chat' | '/api/models' | '/api/chat/confirm'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ApiChatRoute: typeof ApiChatRoute
+  ApiChatRoute: typeof ApiChatRouteWithChildren
   ApiModelsRoute: typeof ApiModelsRoute
 }
 
@@ -82,12 +91,30 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/chat/confirm': {
+      id: '/api/chat/confirm'
+      path: '/confirm'
+      fullPath: '/api/chat/confirm'
+      preLoaderRoute: typeof ApiChatConfirmRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
   }
 }
 
+interface ApiChatRouteChildren {
+  ApiChatConfirmRoute: typeof ApiChatConfirmRoute
+}
+
+const ApiChatRouteChildren: ApiChatRouteChildren = {
+  ApiChatConfirmRoute: ApiChatConfirmRoute,
+}
+
+const ApiChatRouteWithChildren =
+  ApiChatRoute._addFileChildren(ApiChatRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ApiChatRoute: ApiChatRoute,
+  ApiChatRoute: ApiChatRouteWithChildren,
   ApiModelsRoute: ApiModelsRoute,
 }
 export const routeTree = rootRouteImport

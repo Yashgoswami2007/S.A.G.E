@@ -58,25 +58,13 @@ export const Route = createFileRoute("/api/chat")({
 
         console.log("[PROXY] Upstream stream initiated successfully. Forwarding...");
 
-        const { readable, writable } = new TransformStream({
-          transform(chunk, controller) {
-            console.log("[PROXY] upstream event received, length:", chunk.length);
-            console.log("[PROXY] event forwarded");
-            controller.enqueue(chunk);
-          }
-        });
-
-        upstream.body.pipeTo(writable).catch((err: Error) => {
-          console.error("[PROXY] pipe error:", err);
-        });
-
         const headers = new Headers();
         headers.set("Content-Type", "text/event-stream");
         headers.set("Cache-Control", "no-cache");
         headers.set("Connection", "keep-alive");
         headers.set("X-Accel-Buffering", "no");
 
-        return new Response(readable, {
+        return new Response(upstream.body, {
           status: upstream.status,
           headers: headers,
         });

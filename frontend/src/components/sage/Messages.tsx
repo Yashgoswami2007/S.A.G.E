@@ -1,6 +1,5 @@
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { Check, Copy, FileText, RefreshCw, Brain, ChevronDown, ChevronRight } from "lucide-react";
 import { SageMark } from "./SageLogo";
 import { AgentEventRenderer } from "./AgentEventRenderer";
@@ -92,7 +91,7 @@ export function MessageItem({
                 const isLastPart = i === parts.length - 1 || (i === parts.length - 2 && !parts[parts.length - 1]);
                 return (
                   <div key={i} className="relative">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{part}</ReactMarkdown>
+                    <MarkdownRenderer content={part} />
                     {streaming && isLastPart && (
                       <span className="inline-block w-1.5 h-4 ml-1 bg-primary animate-pulse align-middle" />
                     )}
@@ -176,7 +175,7 @@ function ThinkingSection({
       </button>
       {open && (
         <div className="border-t border-border/40 px-3.5 py-3 text-muted-foreground font-mono text-[12.5px] leading-relaxed max-h-96 overflow-y-auto bg-muted/20">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <MarkdownRenderer content={content} />
           {isLive && (
             <span className="inline-block w-1.5 h-3.5 ml-1 bg-primary animate-pulse align-middle" />
           )}
