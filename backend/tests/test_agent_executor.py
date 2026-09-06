@@ -75,9 +75,9 @@ models:
 
         asyncio.run(_async_test())
 
-    def test_retry_limits_on_failure(self):
+    def test_tool_failure_skips_and_completes(self):
         async def _async_test():
-            # Mock a tool that always fails to test max retries
+            # Mock a tool that always fails — executor should skip and still complete
             class FailingTool:
                 name = "fail_tool"
                 description = "Always fails"
@@ -89,19 +89,24 @@ models:
 
             self.executor.tool_registry.register(FailingTool())
             
-            # Force planner to call failing tool
             async def mock_plan(*args, **kwargs):
                 from sage.agent.schemas import Plan, Step
-                return Plan(summary="Fail test", steps=[Step(step_id=1, description="fail", tool_name="fail_tool")])
+                return Plan(
+                    summary="Fail test",
+                    steps=[
+                        Step(step_id=1, description="fail", tool_name="fail_tool"),
+                        Step(step_id=2, description="Respond", tool_name=None),
+                    ],
+                )
 
             self.executor.planner.create_plan = mock_plan
 
-            resp = await self.executor.run(prompt="test failure limits", profile_name="general")
-            self.assertEqual(resp.status, AgentState.FAILED)
+            resp = await self.executor.run(prompt="test failure skip", profile_name="general")
+            self.assertEqual(resp.status, AgentState.COMPLETED)
             
-            # Check that retry count was tracked
+            # Should skip immediately without retrying the same step
             fail_events = [e for e in resp.trace.events if e.retry_count > 0]
-            self.assertGreaterEqual(len(fail_events), 3)
+            self.assertEqual(len(fail_events), 0)
 
         asyncio.run(_async_test())
 

@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # "cpu"  = force CPU-only
     GPU_MODE: str = "auto"
 
+    # Sandbox
+    SANDBOX_RUNS_DIR: str = "./workspace/sandbox_runs"
+
+    # File uploads
+    UPLOAD_DIR: str = "./workspace/uploads"
+
+    # OCR
+    OCR_ENGINE: str = "tesseract"
+
     # Models — default is relative to project root, resolved below
     MODEL_REGISTRY_PATH: str = "config/model_registry.yaml"
 
@@ -78,12 +87,25 @@ class Settings(BaseSettings):
     @classmethod
     def _resolve_paths(cls, instance: "Settings") -> "Settings":
         """
-        Resolve MODEL_REGISTRY_PATH to an absolute path anchored at the project root.
+        Resolve paths to absolute paths anchored at the project root.
         This makes it work regardless of the cwd when uvicorn is started.
         """
+        def resolve_dir(path_str: str) -> str:
+            if not os.path.isabs(path_str):
+                return os.path.normpath(os.path.join(_PROJECT_ROOT, path_str))
+            return os.path.normpath(path_str)
+
+        instance.WORKSPACE_DIR = resolve_dir(instance.WORKSPACE_DIR)
+        instance.SANDBOX_RUNS_DIR = resolve_dir(instance.SANDBOX_RUNS_DIR)
+        instance.UPLOAD_DIR = resolve_dir(instance.UPLOAD_DIR)
+
+        os.makedirs(instance.WORKSPACE_DIR, exist_ok=True)
+        os.makedirs(instance.SANDBOX_RUNS_DIR, exist_ok=True)
+        os.makedirs(instance.UPLOAD_DIR, exist_ok=True)
+
         path = instance.MODEL_REGISTRY_PATH
         if not os.path.isabs(path):
-            abs_path = os.path.join(_PROJECT_ROOT, path)
+            abs_path = os.path.normpath(os.path.join(_PROJECT_ROOT, path))
             if os.path.exists(abs_path):
                 instance.MODEL_REGISTRY_PATH = abs_path
         return instance

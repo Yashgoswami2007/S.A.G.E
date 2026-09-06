@@ -6,6 +6,7 @@ import structlog
 from typing import Dict, List, Optional
 from sage.models.registry import ModelRegistry, ModelConfig
 from sage.models.gpu_detector import detect_gpus, GPUStatus
+from sage.models.model_scanner import ModelScanner
 
 logger = structlog.get_logger(__name__)
 
@@ -47,6 +48,9 @@ class ModelLifecycleManager:
         # ── Detect GPUs once at startup ───────────────────────────────────
         self.gpu_status = detect_gpus()
         self._log_gpu_banner()
+
+        # ── Auto-discover models from /models/ directory ──────────────────
+        self._scan_for_models()
         
         for model in self.registry.list_all():
             if not os.path.exists(model.model_path):
@@ -65,6 +69,29 @@ class ModelLifecycleManager:
         # After spawning all auto-start servers, wait up to 60 s for each to become
         # READY and trigger fallback for any that never make it.
         asyncio.create_task(self._watch_startup_and_fallback())
+
+    def _scan_for_models(self):
+        """Auto-discover .gguf files in the models directory and merge into registry."""
+        from sage.config import settings
+        import os
+
+        # Resolve models directory relative to project root
+        _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+        _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", ".."))
+        models_dir = os.path.join(_PROJECT_ROOT, "models")
+
+        if not os.path.isdir(models_dir):
+            logger.info(f"Models directory not found at {models_dir} — skipping auto-scan.")
+            return
+
+        scanner = ModelScanner(models_dir)
+        existing_ids = self.registry.get_existing_ids()
+        existing_ports = self.registry.get_existing_ports()
+        discovered = scanner.scan(existing_ids, existing_ports)
+
+        if discovered:
+            added = self.registry.merge_discovered(discovered)
+            logger.info(f"Auto-scan: merged {added} newly discovered model(s) into registry.")
 
     def _log_gpu_banner(self):
         """Log a clear startup banner showing GPU status."""
@@ -101,21 +128,21 @@ class ModelLifecycleManager:
         )
 
         if effective_mode == "cpu":
-            logger.info(f"Model {model.id}: gpu_mode=cpu → ngl=0 (CPU-only)")
+            logger.info(f"Model {model.id}: gpu_mode=cpu -> ngl=0 (CPU-only)")
             return 0
 
         if effective_mode == "gpu":
             if not gpu_status.cuda_available:
                 logger.error(
-                    f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected — cannot start"
+                    f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected - cannot start"
                 )
                 raise RuntimeError(f"gpu_mode=gpu requires CUDA but no GPU found for {model.id}")
-            logger.info(f"Model {model.id}: gpu_mode=gpu → ngl=99 (forced GPU offload)")
+            logger.info(f"Model {model.id}: gpu_mode=gpu -> ngl=99 (forced GPU offload)")
             return 99
 
         # effective_mode == "auto"
         if not gpu_status.cuda_available:
-            logger.info(f"Model {model.id}: gpu_mode=auto, no CUDA → ngl=0 (CPU fallback)")
+            logger.info(f"Model {model.id}: gpu_mode=auto, no CUDA -> ngl=0 (CPU fallback)")
             return 0
 
         # CUDA is available — check VRAM fit
@@ -127,7 +154,7 @@ class ModelLifecycleManager:
                 f"Model {model.id}: gpu_mode=auto, "
                 f"needs {model.min_vram_gb} GB, "
                 f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
-                f"→ ngl=99 (GPU offload)"
+                f"-> ngl=99 (GPU offload)"
             )
             return 99
         else:
@@ -135,7 +162,7 @@ class ModelLifecycleManager:
                 f"Model {model.id}: gpu_mode=auto, "
                 f"needs {model.min_vram_gb} GB ({required_mb} MB) but only "
                 f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
-                f"→ ngl=0 (CPU fallback — insufficient VRAM)"
+                f"-> ngl=0 (CPU fallback - insufficient VRAM)"
             )
             return 0
 
@@ -166,6 +193,10 @@ class ModelLifecycleManager:
                 "-c", str(model.context_length),
                 "-ngl", str(effective_ngl)
             ]
+            # Append per-model extra args (e.g. --jinja for gemma-4)
+            if model.extra_args:
+                cmd.extend(model.extra_args)
+                logger.info(f"Model {model.id}: appending extra_args: {model.extra_args}")
         elif model.server_type == "vllm":
             # vLLM requires a CUDA GPU — cannot run CPU-only
             if not (self.gpu_status and self.gpu_status.cuda_available):
@@ -295,16 +326,24 @@ class ModelLifecycleManager:
             task.cancel()
             
         # Terminate processes
-        for model_id, proc in self._processes.items():
+        for model_id, proc in list(self._processes.items()):
             if proc.returncode is None:
                 logger.info(f"Terminating server for {model_id}...")
-                proc.terminate()
+                try:
+                    proc.terminate()
+                except Exception as term_err:
+                    logger.debug(f"Process termination signal failed for {model_id}: {term_err}")
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
                 except asyncio.TimeoutError:
                     logger.warning(f"Force killing server for {model_id}...")
-                    proc.kill()
-                    await proc.wait()
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception as kill_err:
+                        logger.debug(f"Process kill failed for {model_id}: {kill_err}")
+                except (RuntimeError, ProcessLookupError, Exception) as wait_err:
+                    logger.debug(f"Process wait encountered for {model_id}: {wait_err}")
                     
         self._processes.clear()
         self._health_tasks.clear()
@@ -356,12 +395,20 @@ class ModelLifecycleManager:
         proc = self._processes.pop(model_id, None)
         if proc and proc.returncode is None:
             logger.info(f"Terminating server for {model_id}...")
-            proc.terminate()
+            try:
+                proc.terminate()
+            except Exception as term_err:
+                logger.debug(f"Process termination failed for {model_id}: {term_err}")
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception as kill_err:
+                    logger.debug(f"Process kill failed for {model_id}: {kill_err}")
+            except (RuntimeError, ProcessLookupError, Exception) as wait_err:
+                logger.debug(f"Process wait encountered for {model_id}: {wait_err}")
                 
         model.status = "UNAVAILABLE"
         return True

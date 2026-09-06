@@ -62,29 +62,39 @@ class CompletionRequest(BaseModel):
     profile: str = "general"
     task_id: Optional[str] = None
     file_attachments: Optional[List[str]] = None
+    model_id: Optional[str] = None
 
 @router.post("/completions")
 async def create_chat_completion(req: CompletionRequest, request: Request):
     """Executes an agent task and returns completion response with trace."""
-    executor = _get_executor(request)
-    response = await executor.run(
-        prompt=req.prompt,
-        profile_name=req.profile,
-        task_id=req.task_id,
-        file_attachments=req.file_attachments
-    )
-    store_task_result(response)
-    return {
-        "task_id": response.task_id,
-        "status": response.status,
-        "output": response.output,
-        "trace": response.trace.model_dump()
-    }
+    try:
+        executor = _get_executor(request)
+        response = await executor.run(
+            prompt=req.prompt,
+            profile_name=req.profile,
+            task_id=req.task_id,
+            file_attachments=req.file_attachments,
+            model_id=req.model_id
+        )
+        store_task_result(response)
+        return {
+            "task_id": response.task_id,
+            "status": response.status,
+            "output": response.output,
+            "trace": response.trace.model_dump()
+        }
+    except Exception as exc:
+        chat_logger.exception("Error in create_chat_completion: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chat completion failed: {str(exc)}"
+        )
 
 class StreamRequest(BaseModel):
     prompt: str
     profile: str = "general"
     style: str = "normal"
+    model_id: Optional[str] = None
     granted_paths: Optional[List[dict]] = None
     file_attachments: Optional[List[str]] = None
 
@@ -97,22 +107,22 @@ async def chat_stream(req: StreamRequest, request: Request):
         queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
 
         async def stream_callback(trace_event: TraceEvent):
-            agent_event = trace_to_event(trace_event)
-            if agent_event:
-                if getattr(agent_event, "type", "") == "TOKEN":
-                    print(f"[BACKEND] token generated: {repr(getattr(agent_event, 'token', ''))}")
-                print(f"[BACKEND] SSE event emitted: {getattr(agent_event, 'type', '')}")
-                await queue.put(sse_encode(agent_event))
-            
-            # Handle approval wait
-            if trace_event.agent_state == AgentState.WAITING_FOR_APPROVAL:
-                req_id = trace_event.id
-                approval_event = asyncio.Event()
-                _pending_confirmations[req_id] = approval_event
-                try:
-                    await approval_event.wait()
-                finally:
-                    _pending_confirmations.pop(req_id, None)
+            try:
+                agent_event = trace_to_event(trace_event)
+                if agent_event:
+                    await queue.put(sse_encode(agent_event))
+                
+                # Handle approval wait
+                if trace_event.agent_state == AgentState.WAITING_FOR_APPROVAL:
+                    req_id = trace_event.id
+                    approval_event = asyncio.Event()
+                    _pending_confirmations[req_id] = approval_event
+                    try:
+                        await approval_event.wait()
+                    finally:
+                        _pending_confirmations.pop(req_id, None)
+            except Exception as cb_err:
+                chat_logger.error("Error in stream_callback: %s", cb_err, exc_info=True)
 
         async def run_executor():
             try:
@@ -120,6 +130,7 @@ async def chat_stream(req: StreamRequest, request: Request):
                     prompt=req.prompt,
                     profile_name=req.profile,
                     file_attachments=req.file_attachments,
+                    model_id=req.model_id,
                     stream_callback=stream_callback,
                     require_approval_for_high_risk=True
                 )
@@ -129,9 +140,13 @@ async def chat_stream(req: StreamRequest, request: Request):
                 if response.status == AgentState.COMPLETED:
                     await queue.put(sse_encode(FinalEvent(content=response.output)))
                 elif response.status == AgentState.FAILED:
-                    await queue.put(sse_encode(ErrorEvent(message=f"Agent failed: {response.output}", recoverable=False)))
+                    await queue.put(sse_encode(ErrorEvent(message=f"Agent failed: {response.output}", recoverable=True)))
+                    # Still send a fallback final event so frontend always receives a readable answer
+                    await queue.put(sse_encode(FinalEvent(content=f"Sorry, I encountered an issue while processing your request:\n\n{response.output}")))
             except Exception as e:
-                await queue.put(sse_encode(ErrorEvent(message=str(e), recoverable=False)))
+                chat_logger.exception("Exception in chat_stream executor: %s", e)
+                await queue.put(sse_encode(ErrorEvent(message=f"Agent execution error: {str(e)}", recoverable=True)))
+                await queue.put(sse_encode(FinalEvent(content=f"Sorry, an unexpected error occurred while executing the agent:\n\n{str(e)}")))
             finally:
                 await queue.put(None)
 
@@ -142,6 +157,11 @@ async def chat_stream(req: StreamRequest, request: Request):
                 if item is None:
                     break
                 yield item
+        except asyncio.CancelledError:
+            chat_logger.info("Client disconnected from chat SSE stream.")
+            raise
+        except Exception as gen_err:
+            chat_logger.error(f"SSE event generator error: {gen_err}")
         finally:
             if not runner_task.done():
                 runner_task.cancel()
@@ -157,14 +177,37 @@ async def confirm_action(req: ConfirmRequest):
     """Unblocks a pending high-risk tool operation."""
     event = _pending_confirmations.get(req.request_id)
     if not event:
-        raise HTTPException(status_code=404, detail="Confirmation request not found or already processed")
+        raise HTTPException(status_code=404, detail=f"Confirmation request '{req.request_id}' not found or already processed")
     
-    # For now we just resume on any response. If approved=False, ideally we should 
-    # tell the executor to cancel the tool call, but the executor currently just blocks.
-    # A true deny would involve raising an exception in the callback or setting a flag.
-    # Assuming approved=True for the happy path right now.
     event.set()
-    return {"status": "ok"}
+    return {"status": "ok", "request_id": req.request_id, "approved": req.approved}
+
+class ResponseConfirmationRequest(BaseModel):
+    task_id: str
+    prompt: str
+    profile: str = "general"
+    model_id: Optional[str] = None
+    response_content: str
+    file_attachments: Optional[List[str]] = None
+
+@router.post("/confirm-response")
+async def confirm_response(req: ResponseConfirmationRequest):
+    """
+    Validates a response. If empty/invalid, frontend re-triggers the executor.
+    Returns: {confirmed: bool, needs_retry: bool}
+    """
+    content = (req.response_content or "").strip()
+    is_valid = (
+        len(content) >= 10
+        and content != "No output generated."
+        and not content.startswith("Error:")
+    )
+    
+    if is_valid:
+        return {"confirmed": True, "needs_retry": False}
+    
+    # Invalid — tell frontend to trigger retry
+    return {"confirmed": False, "needs_retry": True}
 
 @router.websocket("/ws/{session_id}")
 async def chat_websocket(websocket: WebSocket, session_id: str):
@@ -176,7 +219,10 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             data = await websocket.receive_text()
 
             async def ws_stream_callback(event: TraceEvent):
-                await websocket.send_json(event.model_dump(mode="json"))
+                try:
+                    await websocket.send_json(event.model_dump(mode="json"))
+                except Exception as ws_err:
+                    chat_logger.error(f"WebSocket send error: {ws_err}")
 
             response = await executor.run(
                 prompt=data,
@@ -185,5 +231,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str):
             )
             store_task_result(response)
     except WebSocketDisconnect:
-        pass
+        chat_logger.info("WebSocket disconnected for session %s", session_id)
+    except Exception as e:
+        chat_logger.exception("WebSocket error for session %s: %s", session_id, e)
+        try:
+            await websocket.send_json({"error": str(e), "type": "ERROR"})
+            await websocket.close(code=1011, reason="Server error")
+        except Exception:
+            pass
+
 

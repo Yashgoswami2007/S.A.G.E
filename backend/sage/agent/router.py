@@ -71,13 +71,13 @@ class ModelRouter:
             if all_models:
                 return all_models[0], "fallback to first registered model (none are marked READY)"
             return ModelConfig(
-                id="qwen3-8b",
-                name="Default Reasoning Model",
-                model_path="/models/qwen3-8b-Q4_K_M.gguf",
+                id="gemma-4-12b",
+                name="Gemma 4 12B IT",
+                model_path="./models/gemma-4-12B-it-Q4_K_M.gguf",
                 server_port=8001,
-                capabilities=["reasoning"],
+                capabilities=["reasoning", "coding", "vision", "general"],
                 priority=1,
-                min_vram_gb=5,
+                min_vram_gb=8,
                 context_length=8192
             ), "fallback to hardcoded default reasoning model"
 

@@ -18,6 +18,7 @@ sage/api/chat.py
 sage/api/events.py
 sage/api/health.py
 sage/api/tasks.py
+sage/api/upload.py
 sage/audit/__init__.py
 sage/audit/logger.py
 sage/auth/__init__.py
@@ -42,8 +43,14 @@ sage/models/registry.py
 sage/multimodal/__init__.py
 sage/rag/__init__.py
 sage/sandbox/__init__.py
+sage/sandbox/sandbox_manager.py
+sage/sandbox/schemas.py
 sage/tools/__init__.py
 sage/tools/base.py
+sage/tools/calculator.py
+sage/tools/code_executor.py
+sage/tools/document_generators.py
+sage/tools/document_readers.py
 sage/tools/file_ops.py
 sage/tools/registry.py
 sage/tools/system_ops.py

@@ -12,7 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as ApiModelsRouteImport } from './routes/api/models'
+import { Route as ApiUploadRouteImport } from './routes/api/upload'
 import { Route as ApiChatConfirmRouteImport } from './routes/api/chat.confirm'
+import { Route as ApiChatConfirmResponseRouteImport } from './routes/api/chat.confirm-response'
+import { Route as ApiModelsActivateRouteImport } from './routes/api/models.activate'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -29,43 +32,90 @@ const ApiModelsRoute = ApiModelsRouteImport.update({
   path: '/api/models',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiUploadRoute = ApiUploadRouteImport.update({
+  id: '/api/upload',
+  path: '/api/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiChatConfirmRoute = ApiChatConfirmRouteImport.update({
   id: '/confirm',
   path: '/confirm',
   getParentRoute: () => ApiChatRoute,
 } as any)
+const ApiChatConfirmResponseRoute = ApiChatConfirmResponseRouteImport.update({
+  id: '/confirm-response',
+  path: '/confirm-response',
+  getParentRoute: () => ApiChatRoute,
+} as any)
+const ApiModelsActivateRoute = ApiModelsActivateRouteImport.update({
+  id: '/activate',
+  path: '/activate',
+  getParentRoute: () => ApiModelsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
-  '/api/models': typeof ApiModelsRoute
+  '/api/models': typeof ApiModelsRouteWithChildren
+  '/api/upload': typeof ApiUploadRoute
   '/api/chat/confirm': typeof ApiChatConfirmRoute
+  '/api/chat/confirm-response': typeof ApiChatConfirmResponseRoute
+  '/api/models/activate': typeof ApiModelsActivateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
-  '/api/models': typeof ApiModelsRoute
+  '/api/models': typeof ApiModelsRouteWithChildren
+  '/api/upload': typeof ApiUploadRoute
   '/api/chat/confirm': typeof ApiChatConfirmRoute
+  '/api/chat/confirm-response': typeof ApiChatConfirmResponseRoute
+  '/api/models/activate': typeof ApiModelsActivateRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
-  '/api/models': typeof ApiModelsRoute
+  '/api/models': typeof ApiModelsRouteWithChildren
+  '/api/upload': typeof ApiUploadRoute
   '/api/chat/confirm': typeof ApiChatConfirmRoute
+  '/api/chat/confirm-response': typeof ApiChatConfirmResponseRoute
+  '/api/models/activate': typeof ApiModelsActivateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/chat' | '/api/models' | '/api/chat/confirm'
+  fullPaths:
+    | '/'
+    | '/api/chat'
+    | '/api/models'
+    | '/api/upload'
+    | '/api/chat/confirm'
+    | '/api/chat/confirm-response'
+    | '/api/models/activate'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/chat' | '/api/models' | '/api/chat/confirm'
-  id: '__root__' | '/' | '/api/chat' | '/api/models' | '/api/chat/confirm'
+  to:
+    | '/'
+    | '/api/chat'
+    | '/api/models'
+    | '/api/upload'
+    | '/api/chat/confirm'
+    | '/api/chat/confirm-response'
+    | '/api/models/activate'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/chat'
+    | '/api/models'
+    | '/api/upload'
+    | '/api/chat/confirm'
+    | '/api/chat/confirm-response'
+    | '/api/models/activate'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiChatRoute: typeof ApiChatRouteWithChildren
-  ApiModelsRoute: typeof ApiModelsRoute
+  ApiModelsRoute: typeof ApiModelsRouteWithChildren
+  ApiUploadRoute: typeof ApiUploadRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -91,6 +141,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/upload': {
+      id: '/api/upload'
+      path: '/api/upload'
+      fullPath: '/api/upload'
+      preLoaderRoute: typeof ApiUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/chat/confirm': {
       id: '/api/chat/confirm'
       path: '/confirm'
@@ -98,24 +155,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiChatConfirmRouteImport
       parentRoute: typeof ApiChatRoute
     }
+    '/api/chat/confirm-response': {
+      id: '/api/chat/confirm-response'
+      path: '/confirm-response'
+      fullPath: '/api/chat/confirm-response'
+      preLoaderRoute: typeof ApiChatConfirmResponseRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
+    '/api/models/activate': {
+      id: '/api/models/activate'
+      path: '/activate'
+      fullPath: '/api/models/activate'
+      preLoaderRoute: typeof ApiModelsActivateRouteImport
+      parentRoute: typeof ApiModelsRoute
+    }
   }
 }
 
 interface ApiChatRouteChildren {
   ApiChatConfirmRoute: typeof ApiChatConfirmRoute
+  ApiChatConfirmResponseRoute: typeof ApiChatConfirmResponseRoute
 }
 
 const ApiChatRouteChildren: ApiChatRouteChildren = {
   ApiChatConfirmRoute: ApiChatConfirmRoute,
+  ApiChatConfirmResponseRoute: ApiChatConfirmResponseRoute,
 }
 
 const ApiChatRouteWithChildren =
   ApiChatRoute._addFileChildren(ApiChatRouteChildren)
 
+interface ApiModelsRouteChildren {
+  ApiModelsActivateRoute: typeof ApiModelsActivateRoute
+}
+
+const ApiModelsRouteChildren: ApiModelsRouteChildren = {
+  ApiModelsActivateRoute: ApiModelsActivateRoute,
+}
+
+const ApiModelsRouteWithChildren = ApiModelsRoute._addFileChildren(
+  ApiModelsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiChatRoute: ApiChatRouteWithChildren,
-  ApiModelsRoute: ApiModelsRoute,
+  ApiModelsRoute: ApiModelsRouteWithChildren,
+  ApiUploadRoute: ApiUploadRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -25,4 +25,6 @@ models:
     priority: 2
     min_vram_gb: 8
     context_length: 8192
+    extra_args: ["--jinja"]    # required for gemma-4 unified architecture chat templates
+
 

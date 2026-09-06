@@ -1,8 +1,8 @@
 import yaml
 import os
 import logging
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field, computed_field
+from typing import List, Optional, Set
 
 logger = logging.getLogger("sage.registry")
 
@@ -26,6 +26,25 @@ class ModelConfig(BaseModel):
     context_length: int
     status: str = "UNAVAILABLE"  # READY, DEGRADED, UNAVAILABLE
     fallback_model_id: Optional[str] = None  # id of model to try if this one fails
+    extra_args: List[str] = Field(default_factory=list)  # e.g. ["--jinja"] for gemma-4
+
+    @computed_field
+    @property
+    def supports_vision(self) -> bool:
+        """Whether this model can process images natively."""
+        return "vision" in self.capabilities
+
+    @computed_field
+    @property
+    def supports_image_upload(self) -> bool:
+        """Only vision-capable models can handle raw image uploads."""
+        return "vision" in self.capabilities
+
+    @computed_field
+    @property
+    def supports_files(self) -> bool:
+        """All models support text-extracted file content (PDF, DOCX, etc.)."""
+        return True
 
 class ModelRegistry:
     def __init__(self, registry_path: str):
@@ -74,6 +93,31 @@ class ModelRegistry:
                     "Skipping invalid model entry #%d in '%s': %s",
                     idx, path, exc,
                 )
+
+    def merge_discovered(self, discovered: List[ModelConfig]) -> int:
+        """
+        Merge auto-discovered models into the registry.
+        Does NOT overwrite existing YAML-defined entries.
+        Returns the number of models actually added.
+        """
+        added = 0
+        for model in discovered:
+            if model.id not in self.models:
+                self.models[model.id] = model
+                added += 1
+            else:
+                logger.debug(
+                    "Skipping discovered model %s — already in registry.", model.id
+                )
+        return added
+
+    def get_existing_ids(self) -> Set[str]:
+        """Returns the set of all registered model IDs."""
+        return set(self.models.keys())
+
+    def get_existing_ports(self) -> Set[int]:
+        """Returns the set of all ports used by registered models."""
+        return {m.server_port for m in self.models.values()}
                 
     def get_by_capability(self, capability: str) -> Optional[ModelConfig]:
         """Finds the highest priority model with the given capability (regardless of status)."""

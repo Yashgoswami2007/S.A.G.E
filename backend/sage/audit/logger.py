@@ -3,7 +3,10 @@ import logging
 import json
 from datetime import datetime, timezone
 from sage.config import settings
+from sage.core.utils import configure_stdio_encoding
 from typing import Any
+
+configure_stdio_encoding()
 
 # Configure standard logging to use structlog
 logging.basicConfig(level=settings.LOG_LEVEL.upper(), format="%(message)s")
@@ -43,4 +46,52 @@ class AuditLogger:
             status_code=status_code,
             user_id=user_id,
             latency_ms=latency_ms
+        )
+
+    @staticmethod
+    def log_sandbox_execution(
+        user_id: str | None,
+        session_id: str | None,
+        sandbox_id: str,
+        language: str,
+        code_hash: str,
+        exit_code: int,
+        duration_ms: float,
+        files_created: list[str] | None = None,
+    ):
+        """Log a sandbox code execution event."""
+        logger.info(
+            "sandbox_execution",
+            user_id=user_id,
+            session_id=session_id,
+            data={
+                "sandbox_id": sandbox_id,
+                "language": language,
+                "code_hash": code_hash,
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "files_created": files_created or [],
+            },
+        )
+
+    @staticmethod
+    def log_file_upload(
+        user_id: str | None,
+        session_id: str | None,
+        filename: str,
+        size_bytes: int,
+        mime_type: str,
+        saved_path: str,
+    ):
+        """Log a file upload event."""
+        logger.info(
+            "file_upload",
+            user_id=user_id,
+            session_id=session_id,
+            data={
+                "filename": filename,
+                "size_bytes": size_bytes,
+                "mime_type": mime_type,
+                "saved_path": saved_path,
+            },
         )

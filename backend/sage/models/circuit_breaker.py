@@ -35,6 +35,17 @@ class ModelCircuitBreaker:
         """Returns True if requests should be blocked."""
         return self.get_state(model_id) == CircuitState.OPEN
 
+    def get_remaining_recovery_time(self, model_id: str) -> int:
+        """Returns the number of seconds remaining until circuit attempts recovery, or 0."""
+        state = self._states.get(model_id, CircuitState.CLOSED)
+        if state != CircuitState.OPEN:
+            return 0
+        last_failure = self._last_failure_times.get(model_id, 0)
+        elapsed = time.time() - last_failure
+        remaining = int(self.recovery_timeout - elapsed)
+        return max(0, remaining)
+
+
     def record_success(self, model_id: str):
         """Records a successful request, resetting the circuit if needed."""
         state = self.get_state(model_id)

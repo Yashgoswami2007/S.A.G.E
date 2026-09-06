@@ -1,20 +1,78 @@
-from typing import List
+import json
+import logging
+from typing import List, Optional
 from sage.agent.schemas import Plan, Step
 from sage.models.client import OpenAICompatibleClient
 from sage.agent.profiles.base import AgentProfile
-import json
+
+logger = logging.getLogger("sage.agent.planner")
+
 
 class Planner:
+
+    # ── Schema Formatting ────────────────────────────────────────────────
+
+    @staticmethod
+    def _format_tool_schemas(profile: AgentProfile, tool_registry) -> str:
+        """Build tool documentation from the single source of truth: the registry.
+
+        Iterates every tool in the registry whose name is in
+        ``profile.allowed_tools`` and renders its ``parameters`` JSON schema
+        as a human-readable block the LLM can follow exactly.
+        """
+        # Filter manually — don't assume list_tools() accepts allowed_tools
+        tools = [
+            tool for tool in tool_registry.list_tools()
+            if tool.name in profile.allowed_tools
+        ]
+        if not tools:
+            return "No tools are available for this profile.\n"
+
+        lines = ["Available tools and their parameters:\n"]
+        for tool in sorted(tools, key=lambda t: t.name):
+            props = tool.parameters.get("properties", {})
+            required = set(tool.parameters.get("required", []))
+
+            param_parts = []
+            for pname, pschema in props.items():
+                req_tag = "[REQUIRED]" if pname in required else "[OPTIONAL]"
+                ptype = pschema.get("type", "string")
+                desc = pschema.get("description", "")
+                desc_str = f": {desc}" if desc else ""
+                param_parts.append(f"  - {pname}: {ptype} {req_tag}{desc_str}")
+            params_str = "\n".join(param_parts) if param_parts else "  (no parameters)"
+
+            lines.append(f"{tool.name}")
+            lines.append(f"Description: {tool.description}")
+            lines.append(f"Parameters:\n{params_str}")
+            lines.append("DO NOT use any other arguments.\n")
+        return "\n".join(lines)
+
+    # ── Plan Generation ──────────────────────────────────────────────────
+
     async def create_plan(
         self,
         prompt: str,
         profile: AgentProfile,
         client: OpenAICompatibleClient,
-        model_id: str
+        model_id: str,
+        circuit_breaker_key: Optional[str] = None,
+        *,
+        tool_registry,
     ) -> Plan:
         """
         Generates an initial structured step-by-step plan for the user prompt using the LLM.
+
+        `model_id` is the value sent in the API payload (may be an absolute file path
+        for llama-server).  `circuit_breaker_key` is the logical registry ID used for
+        circuit-breaker state; defaults to `model_id` when not provided.
+        `tool_registry` is mandatory to ensure the LLM receives exact schemas.
         """
+        if tool_registry is None:
+            raise ValueError("tool_registry is required for Planner.create_plan()")
+
+        tool_section = self._format_tool_schemas(profile, tool_registry)
+
         system_prompt = (
             f"You are a task planner for the '{profile.name}' agent profile. "
             "Decompose the user request into clear, logical steps. "
@@ -30,8 +88,11 @@ class Planner:
             '    }\n'
             "  ]\n"
             "}\n\n"
-            f"Allowed tools for this profile: {', '.join(profile.allowed_tools)}.\n"
-            "If no tools are needed, leave tool_name and tool_args as null."
+            f"{tool_section}\n"
+            "IMPORTANT:\n"
+            "- Use ONLY the exact parameters listed above for each tool.\n"
+            "- Do NOT invent or add extra parameters (such as 'path' when not listed).\n"
+            "- If no tools are needed, leave tool_name and tool_args as null."
         )
         
         try:
@@ -44,7 +105,8 @@ class Planner:
                 model=model_id,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048  # increased: Qwen3 <think> blocks need headroom
+                max_tokens=2048,  # increased: Qwen3 <think> blocks need headroom
+                circuit_breaker_key=circuit_breaker_key,
             )
             
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -59,17 +121,29 @@ class Planner:
             
             steps = []
             for s in data.get("steps", []):
+                tool_name = s.get("tool_name")
+                tool_args = s.get("tool_args")
+
+                # Validate tool call against registry schemas before plan acceptance
+                if tool_name:
+                    tool_registry.validate_tool_call(tool_name, tool_args)
+
                 steps.append(Step(
                     step_id=s.get("step_id", 1),
                     description=s.get("description", "Step"),
-                    tool_name=s.get("tool_name"),
-                    tool_args=s.get("tool_args")
+                    tool_name=tool_name,
+                    tool_args=tool_args
                 ))
                 
             return Plan(summary=data.get("summary", "Generated Plan"), steps=steps)
             
         except Exception as e:
-            # Fallback to general plan on parsing error
+            logger.error(
+                "Planner failed: %s\nLLM output: %r",
+                e,
+                content if "content" in locals() else None,
+                exc_info=True,
+            )
             return Plan(
                 summary=f"Process request (fallback): {prompt}",
                 steps=[
@@ -81,3 +155,4 @@ class Planner:
                     )
                 ]
             )
+

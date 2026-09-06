@@ -13,7 +13,10 @@ import {
   ListTodo,
   Loader2,
   Edit3,
-  Brain
+  Brain,
+  Code2,
+  FileOutput,
+  Clock,
 } from "lucide-react";
 import type { AgentEvent } from "@/lib/agent-events";
 
@@ -44,6 +47,11 @@ function EventSwitch({ event }: { event: AgentEvent }) {
     case "COMMAND_STARTED":
     case "COMMAND_FINISHED":
       return <CommandBlock event={event} />;
+    case "SANDBOX_STARTED":
+    case "SANDBOX_FINISHED":
+      return <SandboxBlock event={event} />;
+    case "DOCUMENT_GENERATED":
+      return <DocumentGeneratedBadge event={event} />;
     case "ERROR":
       return <ErrorBanner event={event} />;
     case "CONFIRMATION_REQUIRED":
@@ -218,12 +226,103 @@ function CommandBlock({ event }: { event: Extract<AgentEvent, { type: "COMMAND_S
 
 function ErrorBanner({ event }: { event: Extract<AgentEvent, { type: "ERROR" }> }) {
   return (
-    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400 flex items-start gap-3">
-      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-      <div>
-        <div className="font-semibold">Error</div>
-        <div className="mt-1 opacity-90">{event.message}</div>
+    <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600 dark:text-red-400 flex items-start gap-3">
+      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
+      <div className="flex-1 space-y-1">
+        <div className="flex items-center justify-between gap-2 font-semibold">
+          <span>{event.recoverable ? "Generation Issue" : "System Error"}</span>
+          {event.recoverable && (
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+              Recoverable
+            </span>
+          )}
+        </div>
+        <div className="text-[13px] leading-relaxed opacity-95">{event.message}</div>
       </div>
+    </div>
+  );
+}
+
+function SandboxBlock({ event }: { event: Extract<AgentEvent, { type: "SANDBOX_STARTED" | "SANDBOX_FINISHED" }> }) {
+  const isFinished = event.type === "SANDBOX_FINISHED";
+  const [open, setOpen] = useState(true);
+
+  return (
+    <div className="rounded-xl overflow-hidden border border-border bg-[#0d1117] text-gray-300 font-mono text-[12px]">
+      <div className="flex items-center justify-between bg-black/40 px-3 py-2 border-b border-border/50">
+        <div className="flex items-center gap-2">
+          <Code2 className="h-3.5 w-3.5 text-primary" />
+          <span>
+            {event.type === "SANDBOX_STARTED"
+              ? `Running ${(event as any).language} code...`
+              : "Code execution"}
+          </span>
+          {isFinished && (
+            <span className="flex items-center gap-1 text-[10px] text-gray-500">
+              <Clock className="h-3 w-3" />
+              {((event as any).duration_ms / 1000).toFixed(2)}s
+            </span>
+          )}
+        </div>
+        {!isFinished ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        ) : (
+          <button onClick={() => setOpen(!open)}>
+            {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </button>
+        )}
+      </div>
+
+      {/* Show code preview for SANDBOX_STARTED */}
+      {event.type === "SANDBOX_STARTED" && (event as any).code && (
+        <div className="p-3 overflow-x-auto max-h-40 border-b border-border/30 bg-[#161b22]">
+          <pre className="whitespace-pre-wrap text-blue-300">{(event as any).code}</pre>
+        </div>
+      )}
+
+      {/* Show output for SANDBOX_FINISHED */}
+      {isFinished && open && (
+        <div className="p-3 overflow-x-auto max-h-60">
+          {(event as any).stdout && (
+            <div className="whitespace-pre-wrap mb-2">{(event as any).stdout}</div>
+          )}
+          {(event as any).stderr && (
+            <div className="whitespace-pre-wrap text-red-400 mb-2">{(event as any).stderr}</div>
+          )}
+          <div className={`mt-1 text-[11px] ${(event as any).exit_code === 0 ? "text-emerald-400" : "text-red-400"}`}>
+            Exit code: {(event as any).exit_code}
+          </div>
+          {(event as any).files_created?.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {(event as any).files_created.map((f: string, i: number) => (
+                <span key={i} className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] text-emerald-400">
+                  <FileOutput className="h-3 w-3" />
+                  {f.split('/').pop() || f.split('\\').pop()}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DocumentGeneratedBadge({ event }: { event: Extract<AgentEvent, { type: "DOCUMENT_GENERATED" }> }) {
+  const typeLabel: Record<string, string> = {
+    docx: "📄 Word",
+    xlsx: "📊 Excel",
+    pptx: "📽️ PowerPoint",
+    pdf: "📕 PDF",
+  };
+  const label = typeLabel[event.doc_type] || `📎 ${event.doc_type.toUpperCase()}`;
+  const filename = event.path.split('/').pop() || event.path.split('\\').pop();
+
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary">
+      <FileOutput className="h-3.5 w-3.5" />
+      <span>{label}: <strong>{filename}</strong></span>
+      <span className="opacity-60 text-[10px]">({Math.round(event.size_bytes / 1024)} KB)</span>
     </div>
   );
 }

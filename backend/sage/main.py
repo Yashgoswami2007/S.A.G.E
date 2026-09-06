@@ -3,21 +3,30 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
+# Windows: force UTF-8 stdio before any logging (cp1252 cannot encode emoji in LLM output).
+from sage.core.utils import configure_stdio_encoding
+configure_stdio_encoding()
+
 # Windows requires ProactorEventLoop to support asyncio subprocesses.
 # SelectorEventLoop (the default on Windows) raises NotImplementedError
 # when asyncio.create_subprocess_exec is called.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings
 from sage.auth.middleware import AuthMiddleware
-from sage.api import health, auth, admin, chat, tasks
+from sage.core.exceptions import SAGEError
+from sage.api import health, auth, admin, chat, tasks, upload
 from sage.models.lifecycle import ModelLifecycleManager
 
 from sage.models.registry import ModelRegistry
 
 logger = logging.getLogger("sage")
+
 
 # Initialize ModelLifecycleManager — tolerant of missing/corrupt registry files.
 # If the registry can't be loaded, the manager is still created (with an empty
@@ -75,3 +84,83 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(upload.router, prefix="/api", tags=["upload"])
+
+# Global Exception Handlers
+@app.exception_handler(SAGEError)
+async def sage_error_handler(request: Request, exc: SAGEError):
+    logger.warning("SAGEError [%s] on %s %s: %s", exc.code, request.method, request.url.path, exc.message)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.to_dict(),
+            "detail": exc.message,
+        },
+    )
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    logger.warning("HTTPException [%s] on %s %s: %s", exc.status_code, request.method, request.url.path, exc.detail)
+    code_name = {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        405: "METHOD_NOT_ALLOWED",
+        408: "REQUEST_TIMEOUT",
+        409: "CONFLICT",
+        422: "VALIDATION_ERROR",
+        429: "RATE_LIMITED",
+        500: "INTERNAL_SERVER_ERROR",
+        502: "BAD_GATEWAY",
+        503: "SERVICE_UNAVAILABLE",
+        504: "GATEWAY_TIMEOUT",
+    }.get(exc.status_code, f"HTTP_{exc.status_code}")
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": code_name,
+                "message": str(exc.detail),
+                "status_code": exc.status_code,
+                "details": {},
+            },
+            "detail": str(exc.detail),
+        },
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    msg = "; ".join(f"{'.'.join(str(l) for l in err.get('loc', []))}: {err.get('msg')}" for err in errors)
+    logger.warning("ValidationError on %s %s: %s", request.method, request.url.path, msg)
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": f"Input validation failed: {msg}",
+                "status_code": 422,
+                "details": {"errors": errors},
+            },
+            "detail": f"Input validation failed: {msg}",
+        },
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected error occurred while processing your request.",
+                "status_code": 500,
+                "details": {"exception_type": type(exc).__name__, "message": str(exc)},
+            },
+            "detail": f"Internal server error: {str(exc)}",
+        },
+    )
+

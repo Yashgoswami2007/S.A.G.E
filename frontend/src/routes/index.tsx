@@ -69,8 +69,11 @@ function SagePage() {
   const [style, setStyle] = useState("normal");
   const [profile, setProfile] = useState("auto");
   const [streaming, setStreaming] = useState(false);
+  const [modelLoading, setModelLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 2;
 
   const activeChat = useMemo(
     () => chats.find((c) => c.id === activeId) ?? null,
@@ -138,17 +141,43 @@ function SagePage() {
             profile: resolvedProfile,
             connectors: connectors.filter((c) => c.enabled).map((c) => c.name),
             messages: history.map((m) => toApiMessage(m)),
+            model_id: model,
+            file_attachments: history.flatMap((m) =>
+              (m.attachments ?? []).map((a) => a.serverPath).filter(Boolean)
+            ),
           }),
         });
 
         if (!response.ok || !response.body) {
-          const detail = await response.text().catch(() => "");
+          let detail = "";
+          try {
+            const errObj = await response.json();
+            detail = errObj?.error?.message || errObj?.detail || (typeof errObj?.error === "string" ? errObj.error : "");
+          } catch {
+            detail = await response.text().catch(() => "");
+          }
           if (response.status === 429) toast.error("Rate limit reached — try again in a moment.");
           else if (response.status === 402) toast.error("AI credits exhausted. Add credits to continue.");
-          else toast.error(detail || "SAGE could not respond.");
+          else toast.error(detail || `SAGE server error (${response.status})`);
+
+          // Keep assistant message in thread with an ERROR event and retry ability
           updateChat(chatId, (chat) => ({
             ...chat,
-            messages: chat.messages.filter((m) => m.id !== assistantId),
+            messages: chat.messages.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    events: [
+                      ...(m.events || []),
+                      {
+                        type: "ERROR",
+                        message: detail || `Request failed with status ${response.status}. Please check backend logs or retry.`,
+                        recoverable: true,
+                      },
+                    ],
+                  }
+                : m
+            ),
           }));
           return;
         }
@@ -191,7 +220,12 @@ function SagePage() {
                 for (const evt of chunkEvents) {
                   if (evt.type === "FINAL") {
                     console.log("[FRONTEND] FINAL content:", evt.content);
-                    newContent = evt.content; // ALWAYS treat FINAL as authoritative
+                    // Defense-in-depth: strip any residual <think> tags
+                    const cleaned = evt.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+                    // Only overwrite accumulated tokens if FINAL has meaningful content
+                    if (cleaned) {
+                      newContent = cleaned;
+                    }
                     newEvents.push(evt);
                   } else if (evt.type === "CONFIRMATION_REQUIRED") {
                     fetch("/api/chat/confirm", {
@@ -227,11 +261,73 @@ function SagePage() {
           }
         }
       } catch (error) {
-        if ((error as Error).name !== "AbortError") toast.error("Connection interrupted.");
+        const isAbort = (error as Error)?.name === "AbortError";
+        if (!isAbort) {
+          const errMsg = (error as Error)?.message || "Connection interrupted.";
+          toast.error(errMsg);
+          updateChat(chatId, (chat) => ({
+            ...chat,
+            messages: chat.messages.map((m) => {
+              if (m.id !== assistantId) return m;
+              const events = [...(m.events || [])];
+              if (!events.some((e) => e.type === "ERROR")) {
+                events.push({
+                  type: "ERROR",
+                  message: `Stream interrupted: ${errMsg}. You can retry this request.`,
+                  recoverable: true,
+                });
+              }
+              return { ...m, events };
+            }),
+          }));
+        }
       } finally {
         setStreaming(false);
         abortRef.current = null;
         flushChats(chatsRef.current);
+
+        // ── Response confirmation: auto-retry on empty response ──
+        const finalChat = chatsRef.current.find((c) => c.id === chatId);
+        const lastMsg = finalChat?.messages[finalChat.messages.length - 1];
+        if (
+          lastMsg?.role === "assistant" &&
+          retryCountRef.current < MAX_RETRIES
+        ) {
+          try {
+            const resp = await fetch("/api/chat/confirm-response", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                task_id: chatId,
+                prompt: "Auto-retry", // Not fully used on backend yet
+                response_content: lastMsg.content,
+              }),
+            });
+            
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data.needs_retry) {
+                retryCountRef.current += 1;
+                console.log(
+                  `[SAGE] Empty/invalid response detected via backend. Auto-retrying (${retryCountRef.current}/${MAX_RETRIES})...`
+                );
+                toast.info(`Retrying... (attempt ${retryCountRef.current + 1})`);
+
+                // Remove the failed assistant message and re-run
+                const trimmed = finalChat!.messages.filter((m) => m.id !== lastMsg.id);
+                updateChat(chatId, (chat) => ({ ...chat, messages: trimmed }));
+                // Small delay before retry
+                await new Promise((r) => setTimeout(r, 500));
+                void run(chatId, trimmed, resolvedProfile);
+                return;
+              }
+            }
+          } catch (e) {
+            console.error("Failed to confirm response:", e);
+          }
+        }
+        // Reset retry counter on successful response
+        retryCountRef.current = 0;
       }
     },
     [connectors, model, style, updateChat],
@@ -298,8 +394,41 @@ function SagePage() {
 
   const newChat = useCallback(() => {
     abortRef.current?.abort();
+    retryCountRef.current = 0;
     setActiveId(null);
   }, []);
+
+  // ── Model activation handler ──
+  const handleModelChange = useCallback(
+    async (newModelId: string) => {
+      if (newModelId === model) return;
+      // Find the target model to check if it needs activation
+      const targetModel = models.find((m) => m.id === newModelId);
+      if (targetModel && targetModel.status !== "READY") {
+        setModelLoading(true);
+        try {
+          const resp = await fetch("/api/models/activate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_id: newModelId }),
+          });
+          if (!resp.ok) {
+            const detail = await resp.text().catch(() => "");
+            toast.error(`Failed to load model: ${detail || "Unknown error"}`);
+            return;
+          }
+          toast.success(`${targetModel.name} is now active.`);
+        } catch {
+          toast.error("Failed to activate model.");
+          return;
+        } finally {
+          setModelLoading(false);
+        }
+      }
+      setModel(newModelId);
+    },
+    [model, models],
+  );
 
   const deleteChat = useCallback(
     (id: string) => {
@@ -364,13 +493,14 @@ function SagePage() {
                 streaming={streaming}
                 models={models}
                 model={model || (models[0]?.id ?? "")}
-                onModelChange={setModel}
+                onModelChange={handleModelChange}
                 style={style}
                 onStyleChange={setStyle}
                 profile={profile}
                 onProfileChange={setProfile}
                 onOpenConnectors={() => setConnectorsOpen(true)}
                 connectedCount={connectedCount}
+                modelLoading={modelLoading}
               />
               <div className="mt-4 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (
@@ -410,13 +540,14 @@ function SagePage() {
                   streaming={streaming}
                   models={models}
                   model={model || (models[0]?.id ?? "")}
-                  onModelChange={setModel}
+                  onModelChange={handleModelChange}
                   style={style}
                   onStyleChange={setStyle}
                   profile={profile}
                   onProfileChange={setProfile}
                   onOpenConnectors={() => setConnectorsOpen(true)}
                   connectedCount={connectedCount}
+                  modelLoading={modelLoading}
                 />
                 <p className="mt-2 text-center text-xs text-muted-foreground">
                   SAGE can make mistakes. Please double-check responses.
@@ -441,9 +572,11 @@ function SagePage() {
 function toApiMessage(message: ChatMessage) {
   const images = (message.attachments ?? []).filter((a) => a.kind === "image");
   const texts = (message.attachments ?? []).filter((a) => a.kind === "text");
+  const docs = (message.attachments ?? []).filter((a) => a.kind === "document");
   const textBody = [
     message.content,
     ...texts.map((t) => `\n\n--- File: ${t.name} ---\n${t.data.slice(0, 20000)}`),
+    ...docs.map((d) => `\n\n[Attached file: ${d.name}${d.serverPath ? ` (path: ${d.serverPath})` : ""}]`),
   ]
     .filter(Boolean)
     .join("");

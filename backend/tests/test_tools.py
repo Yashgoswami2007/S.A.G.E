@@ -25,7 +25,7 @@ class TestTools(unittest.TestCase):
 
     def test_openai_schema_generation(self):
         schemas = self.registry.get_openai_schemas()
-        self.assertEqual(len(schemas), 7)
+        self.assertEqual(len(schemas), len(self.registry.list_tools()))
         for s in schemas:
             self.assertEqual(s["type"], "function")
             self.assertIn("name", s["function"])
