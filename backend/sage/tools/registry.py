@@ -18,7 +18,7 @@ _JSON_TYPE_MAP = {
 _ARG_ALIASES: dict[str, tuple[str, ...]] = {
     "path": ("file_path", "filepath", "filename", "file", "file_name"),
     "pattern": ("glob", "glob_pattern"),
-    "query": ("search", "search_query", "text", "keyword"),
+    "query": ("search", "search_query", "keyword"),
     "content": ("text", "body", "data"),
     "code": ("source", "source_code", "script"),
 }
@@ -129,6 +129,9 @@ class ToolRegistry:
 
         # 3. Basic type validation
         for key, value in kwargs.items():
+            if value is None and key not in required:
+                continue
+                
             expected_type_str = properties.get(key, {}).get("type")
             if not expected_type_str:
                 continue

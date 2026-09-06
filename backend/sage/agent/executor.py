@@ -329,25 +329,82 @@ class ReActExecutor:
                     current_step_idx += 1
                     step_retry_count = 0
                 else:
-                    # Tool failed — record the failure and continue to the next step
-                    # so the LLM can synthesize a response with whatever context exists.
-                    reflection_msg = (
-                        f"Step {step.step_id} failed: {tool_res.error}. "
-                        "Skipping step and continuing."
-                    )
-                    reflect_event = TraceEvent(
-                        task_id=task_id,
-                        step_id=step.step_id,
-                        agent_state=AgentState.REFLECTING,
-                        profile=profile.name,
-                        selected_model=model_config.id,
-                        error=tool_res.error,
-                        reflection=reflection_msg,
-                        retry_count=step_retry_count,
-                    )
-                    await emit(reflect_event)
-                    current_step_idx += 1
-                    step_retry_count = 0
+                    if step_retry_count < self.max_retries_per_step:
+                        step_retry_count += 1
+                        
+                        reflection_msg = (
+                            f"Step {step.step_id} failed: {tool_res.error}. "
+                            f"Attempting retry {step_retry_count}/{self.max_retries_per_step}."
+                        )
+                        reflect_event = TraceEvent(
+                            task_id=task_id,
+                            step_id=step.step_id,
+                            agent_state=AgentState.REFLECTING,
+                            profile=profile.name,
+                            selected_model=model_config.id,
+                            error=tool_res.error,
+                            reflection=reflection_msg,
+                            retry_count=step_retry_count,
+                        )
+                        await emit(reflect_event)
+                        
+                        retry_prompt = (
+                            f"The tool '{tool_name}' failed with the following error:\n"
+                            f"{tool_res.error}\n\n"
+                            f"Your previous arguments were:\n{json.dumps(tool_args)}\n\n"
+                            f"Tool schema:\n{self.planner._format_tool_schemas(profile, self.tool_registry)}\n\n"
+                            "Please provide the corrected tool arguments. "
+                            "Respond ONLY with a JSON object containing the arguments."
+                        )
+                        
+                        try:
+                            retry_resp = await client.chat(
+                                model=llm_model_id,
+                                messages=[{"role": "user", "content": retry_prompt}],
+                                temperature=0.1,
+                                circuit_breaker_key=cb_key,
+                            )
+                            content = retry_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            
+                            # Extract JSON if wrapped in markdown
+                            if "```json" in content:
+                                content = content.split("```json")[1].split("```")[0].strip()
+                            elif "```" in content:
+                                content = content.split("```")[1].split("```")[0].strip()
+                                
+                            # If it starts with <think> tag (e.g. Qwen), remove reasoning
+                            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                                
+                            corrected_args = json.loads(content)
+                            
+                            # Validate corrected args before retrying
+                            self.tool_registry.validate_tool_call(tool_name, corrected_args)
+                            
+                            # Update step args and DON'T increment current_step_idx
+                            step.tool_args = corrected_args
+                        except Exception as retry_err:
+                            logger.error(f"Failed to generate or validate corrected arguments: {retry_err}")
+                            # If correction fails, we still loop to let it retry or fail on next iteration
+                            
+                    else:
+                        # Tool failed and max retries exceeded
+                        reflection_msg = (
+                            f"Step {step.step_id} failed after {step_retry_count} retries: {tool_res.error}. "
+                            "Skipping step and continuing."
+                        )
+                        reflect_event = TraceEvent(
+                            task_id=task_id,
+                            step_id=step.step_id,
+                            agent_state=AgentState.REFLECTING,
+                            profile=profile.name,
+                            selected_model=model_config.id,
+                            error=tool_res.error,
+                            reflection=reflection_msg,
+                            retry_count=step_retry_count,
+                        )
+                        await emit(reflect_event)
+                        current_step_idx += 1
+                        step_retry_count = 0
             else:
                 # LLM Direct Response step
                 messages = [

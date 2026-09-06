@@ -83,7 +83,8 @@ class ListDirTool(BaseTool):
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Optional relative path inside the workspace. Defaults to '.'."
+                "description": "Optional relative path inside the workspace. Defaults to '.'.",
+                "default": "."
             }
         },
         "required": []

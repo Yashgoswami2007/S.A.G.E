@@ -38,8 +38,12 @@ class Planner:
                 req_tag = "[REQUIRED]" if pname in required else "[OPTIONAL]"
                 ptype = pschema.get("type", "string")
                 desc = pschema.get("description", "")
+                
+                default_val = pschema.get("default")
+                default_str = f" (Default: {default_val})" if default_val is not None else ""
+                
                 desc_str = f": {desc}" if desc else ""
-                param_parts.append(f"  - {pname}: {ptype} {req_tag}{desc_str}")
+                param_parts.append(f"  - {pname}: {ptype} {req_tag}{default_str}{desc_str}")
             params_str = "\n".join(param_parts) if param_parts else "  (no parameters)"
 
             lines.append(f"{tool.name}")
@@ -83,16 +87,19 @@ class Planner:
             '    {\n'
             '      "step_id": 1,\n'
             '      "description": "Description of the step",\n'
-            '      "tool_name": "name_of_tool_if_applicable",\n'
-            '      "tool_args": {"arg1": "value1"}\n'
+            '      "tool_name": "exact_tool_name_or_null",\n'
+            '      "tool_args": null\n'
             '    }\n'
             "  ]\n"
             "}\n\n"
             f"{tool_section}\n"
             "IMPORTANT:\n"
-            "- Use ONLY the exact parameters listed above for each tool.\n"
-            "- Do NOT invent or add extra parameters (such as 'path' when not listed).\n"
-            "- If no tools are needed, leave tool_name and tool_args as null."
+            "- Use ONLY the exact parameters listed for the selected tool.\n"
+            "- Copy parameter names exactly from the tool schema.\n"
+            "- Do NOT invent, rename, or add parameters.\n"
+            "- tool_args must be a JSON object containing only valid parameters for that tool.\n"
+            "- If the tool has no arguments, use an empty object {}.\n"
+            "- If no tool is needed, set tool_name and tool_args to null.\n"
         )
         
         try:
@@ -129,7 +136,7 @@ class Planner:
                     tool_registry.validate_tool_call(tool_name, tool_args)
 
                 steps.append(Step(
-                    step_id=s.get("step_id", 1),
+                    step_id=s.get("step_id", len(steps) + 1),
                     description=s.get("description", "Step"),
                     tool_name=tool_name,
                     tool_args=tool_args

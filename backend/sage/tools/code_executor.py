@@ -88,6 +88,7 @@ class RunScriptTool(BaseTool):
             "language": {
                 "type": "string",
                 "description": "Programming language (auto-detected from extension if not provided)",
+                "default": None,
             },
         },
         "required": ["path"],

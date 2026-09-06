@@ -48,6 +48,7 @@ class ReadPDFTool(BaseTool):
             "pages": {
                 "type": "string",
                 "description": "Optional page range, e.g. '1-5' or '1,3,5'. Default: all pages",
+                "default": None,
             },
         },
         "required": ["path"],
@@ -198,6 +199,7 @@ class ReadXlsxTool(BaseTool):
             "max_rows": {
                 "type": "integer",
                 "description": "Maximum number of rows to read. Default: all rows",
+                "default": None,
             },
         },
         "required": ["path"],

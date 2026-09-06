@@ -69,6 +69,7 @@ class GenerateDocxTool(BaseTool):
             "output_dir": {
                 "type": "string",
                 "description": "Optional output subdirectory within workspace. Default: 'output'",
+                "default": None,
             },
         },
         "required": ["filename", "title", "sections"],
@@ -156,6 +157,7 @@ class GenerateXlsxTool(BaseTool):
             "output_dir": {
                 "type": "string",
                 "description": "Optional output subdirectory. Default: 'output'",
+                "default": None,
             },
         },
         "required": ["filename", "sheets"],
@@ -257,6 +259,7 @@ class GeneratePptxTool(BaseTool):
             "output_dir": {
                 "type": "string",
                 "description": "Optional output subdirectory. Default: 'output'",
+                "default": None,
             },
         },
         "required": ["filename", "title", "slides"],
