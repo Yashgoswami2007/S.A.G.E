@@ -14,7 +14,25 @@ from sage.tools.base import BaseTool, ToolPermission, ToolResult
 from sage.config import settings
 
 logger = logging.getLogger("sage.tools.document_generators")
+def _resolve_path(path_str: str) -> Path:
+    """Resolves relative paths against workspace directory and enforces containment."""
+    base_dir = Path(settings.WORKSPACE_DIR).resolve()
+    target_path = (base_dir / path_str).resolve()
 
+    print("=== PDF PATH DEBUG ===")
+    print("WORKSPACE_DIR:", settings.WORKSPACE_DIR)
+    print("BASE DIR:", base_dir)
+    print("INPUT:", path_str)
+    print("RESOLVED:", target_path)
+    print("EXISTS:", target_path.exists())
+    print("======================")
+
+    try:
+        target_path.relative_to(base_dir)
+    except ValueError:
+        if not str(target_path).startswith(str(base_dir)):
+            return base_dir
+    return target_path
 
 def _output_path(filename: str, output_dir: Optional[str] = None) -> Path:
     """Resolve output path within the workspace."""

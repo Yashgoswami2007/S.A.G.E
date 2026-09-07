@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "dev"
     LOG_LEVEL: str = "INFO"
     AIRGAP_MODE: bool = False
-    WORKSPACE_DIR: str = "./workspace"
+    WORKSPACE_DIR: str = "C:/Users/HP/Downloads/SAGE/workspace"
 
     # Database
     DATABASE_URL: str = Field(default="postgresql+asyncpg://sage:sage@localhost:5432/sage")
