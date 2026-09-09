@@ -20,14 +20,9 @@ chat_logger = logging.getLogger("sage.chat")
 
 router = APIRouter()
 
-# Shared dependencies (stateless, safe to create once)
 tool_registry = create_default_tool_registry()
 profile_manager = ProfileManager()
-
-# Lazily-built executor cache — needs app.state.lifecycle_manager at runtime
 _executor: Optional[ReActExecutor] = None
-
-# Global dictionary for pending confirmations (in-memory, single-server)
 _pending_confirmations: Dict[str, asyncio.Event] = {}
 
 def _get_executor(request: Request) -> ReActExecutor:
@@ -63,6 +58,7 @@ class CompletionRequest(BaseModel):
     task_id: Optional[str] = None
     file_attachments: Optional[List[str]] = None
     model_id: Optional[str] = None
+    history: Optional[List[Dict[str, str]]] = None
 
 @router.post("/completions")
 async def create_chat_completion(req: CompletionRequest, request: Request):
@@ -74,7 +70,8 @@ async def create_chat_completion(req: CompletionRequest, request: Request):
             profile_name=req.profile,
             task_id=req.task_id,
             file_attachments=req.file_attachments,
-            model_id=req.model_id
+            model_id=req.model_id,
+            history=req.history,
         )
         store_task_result(response)
         return {
@@ -97,6 +94,7 @@ class StreamRequest(BaseModel):
     model_id: Optional[str] = None
     granted_paths: Optional[List[dict]] = None
     file_attachments: Optional[List[str]] = None
+    history: Optional[List[Dict[str, str]]] = None
 
 @router.post("/stream")
 async def chat_stream(req: StreamRequest, request: Request):
@@ -112,7 +110,6 @@ async def chat_stream(req: StreamRequest, request: Request):
                 if agent_event:
                     await queue.put(sse_encode(agent_event))
                 
-                # Handle approval wait
                 if trace_event.agent_state == AgentState.WAITING_FOR_APPROVAL:
                     req_id = trace_event.id
                     approval_event = asyncio.Event()
@@ -131,17 +128,16 @@ async def chat_stream(req: StreamRequest, request: Request):
                     profile_name=req.profile,
                     file_attachments=req.file_attachments,
                     model_id=req.model_id,
+                    history=req.history,
                     stream_callback=stream_callback,
                     require_approval_for_high_risk=True
                 )
                 store_task_result(response)
                 
-                # Emit FINAL event
                 if response.status == AgentState.COMPLETED:
                     await queue.put(sse_encode(FinalEvent(content=response.output)))
                 elif response.status == AgentState.FAILED:
                     await queue.put(sse_encode(ErrorEvent(message=f"Agent failed: {response.output}", recoverable=True)))
-                    # Still send a fallback final event so frontend always receives a readable answer
                     await queue.put(sse_encode(FinalEvent(content=f"Sorry, I encountered an issue while processing your request:\n\n{response.output}")))
             except Exception as e:
                 chat_logger.exception("Exception in chat_stream executor: %s", e)
@@ -206,7 +202,6 @@ async def confirm_response(req: ResponseConfirmationRequest):
     if is_valid:
         return {"confirmed": True, "needs_retry": False}
     
-    # Invalid — tell frontend to trigger retry
     return {"confirmed": False, "needs_retry": True}
 
 @router.websocket("/ws/{session_id}")
