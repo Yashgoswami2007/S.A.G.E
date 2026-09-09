@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from sage.agent.schemas import Plan, Step
 from sage.models.client import OpenAICompatibleClient
 from sage.agent.profiles.base import AgentProfile
@@ -10,17 +10,9 @@ logger = logging.getLogger("sage.agent.planner")
 
 class Planner:
 
-    # ── Schema Formatting ────────────────────────────────────────────────
-
     @staticmethod
     def _format_tool_schemas(profile: AgentProfile, tool_registry) -> str:
-        """Build tool documentation from the single source of truth: the registry.
-
-        Iterates every tool in the registry whose name is in
-        ``profile.allowed_tools`` and renders its ``parameters`` JSON schema
-        as a human-readable block the LLM can follow exactly.
-        """
-        # Filter manually — don't assume list_tools() accepts allowed_tools
+        """Build tool documentation from the single source of truth: the registry."""
         tools = [
             tool for tool in tool_registry.list_tools()
             if tool.name in profile.allowed_tools
@@ -38,10 +30,8 @@ class Planner:
                 req_tag = "[REQUIRED]" if pname in required else "[OPTIONAL]"
                 ptype = pschema.get("type", "string")
                 desc = pschema.get("description", "")
-                
                 default_val = pschema.get("default")
                 default_str = f" (Default: {default_val})" if default_val is not None else ""
-                
                 desc_str = f": {desc}" if desc else ""
                 param_parts.append(f"  - {pname}: {ptype} {req_tag}{default_str}{desc_str}")
             params_str = "\n".join(param_parts) if param_parts else "  (no parameters)"
@@ -52,8 +42,6 @@ class Planner:
             lines.append("DO NOT use any other arguments.\n")
         return "\n".join(lines)
 
-    # ── Plan Generation ──────────────────────────────────────────────────
-
     async def create_plan(
         self,
         prompt: str,
@@ -63,6 +51,7 @@ class Planner:
         circuit_breaker_key: Optional[str] = None,
         *,
         tool_registry,
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> Plan:
         """
         Generates an initial structured step-by-step plan for the user prompt using the LLM.
@@ -71,6 +60,7 @@ class Planner:
         for llama-server).  `circuit_breaker_key` is the logical registry ID used for
         circuit-breaker state; defaults to `model_id` when not provided.
         `tool_registry` is mandatory to ensure the LLM receives exact schemas.
+        `history` contains prior text-only conversation turns.
         """
         if tool_registry is None:
             raise ValueError("tool_registry is required for Planner.create_plan()")
@@ -105,20 +95,20 @@ class Planner:
         try:
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
+                *(history or []),
+                {"role": "user", "content": prompt},
             ]
             
             response = await client.chat(
                 model=model_id,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048,  # increased: Qwen3 <think> blocks need headroom
+                max_tokens=2048,
                 circuit_breaker_key=circuit_breaker_key,
             )
             
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
             
-            # Simple heuristic to extract JSON if surrounded by markdown code blocks
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
@@ -131,7 +121,6 @@ class Planner:
                 tool_name = s.get("tool_name")
                 tool_args = s.get("tool_args")
 
-                # Validate tool call against registry schemas before plan acceptance
                 if tool_name:
                     tool_registry.validate_tool_call(tool_name, tool_args)
 
