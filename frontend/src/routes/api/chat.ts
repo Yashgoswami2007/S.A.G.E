@@ -24,8 +24,23 @@ export const Route = createFileRoute("/api/chat")({
           return new Response("Messages are required", { status: 400 });
         }
 
-        // We use the most recent user message as the prompt for the agent
+        // We use the most recent user message as the prompt for the agent.
+        // Previous turns are forwarded separately as text-only history so the
+        // planner and executor can resolve conversational follow-ups.
         const lastMessage = messages[messages.length - 1]!;
+        const history = messages.slice(0, -1).map((message) => {
+          let content = "";
+          if (typeof message.content === "string") {
+            content = message.content;
+          } else if (Array.isArray(message.content)) {
+            content = message.content
+              .filter((part) => part.type === "text")
+              .map((part) => (part as { type: "text"; text: string }).text)
+              .join("\n");
+          }
+          return { role: message.role, content };
+        });
+
         let prompt = "";
         let file_attachments: string[] = body.file_attachments || [];
 
@@ -43,6 +58,7 @@ export const Route = createFileRoute("/api/chat")({
         }
 
         console.log("[PROXY] Sending upstream request to /api/chat/stream...");
+        console.log("[PROXY] history messages:", history.length);
         console.log("[PROXY] file_attachments:", file_attachments);
 
         let upstream: Response;
@@ -54,6 +70,7 @@ export const Route = createFileRoute("/api/chat")({
             },
             body: JSON.stringify({
               prompt: prompt,
+              history: history,
               profile: body.profile || "general",
               style: body.style || "normal",
               model_id: body.model_id || null,
