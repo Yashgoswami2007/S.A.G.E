@@ -1,0 +1,331 @@
+diff --git a/config/sage.yaml b/config/sage.yaml
+index 10a6abf..2075b5a 100644
+--- a/config/sage.yaml
++++ b/config/sage.yaml
+@@ -3,7 +3,7 @@
+ ENVIRONMENT: "dev"
+ LOG_LEVEL: "INFO"
+ AIRGAP_MODE: true
+-WORKSPACE_DIR: "/workspace"
++WORKSPACE_DIR: "./workspace"
+ 
+ JWT_ALGORITHM: "HS256"
+ JWT_EXPIRY_MINUTES: 60
+diff --git a/frontend/src/components/sage/SageLogo.tsx b/frontend/src/components/sage/SageLogo.tsx
+index 9103233..28be3ff 100644
+--- a/frontend/src/components/sage/SageLogo.tsx
++++ b/frontend/src/components/sage/SageLogo.tsx
+@@ -1,13 +1,12 @@
+ export function SageMark({ className = "h-6 w-6" }: { className?: string }) {
+   return (
+-    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+-      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+-        <path d="M12 3v18" />
+-        <path d="M12 8c0-2.2 1.9-4 4.2-4 .3 2.6-1.6 4.7-4.2 5" />
+-        <path d="M12 13c0-2.2-1.9-4-4.2-4C7.5 11.6 9.4 13.7 12 14" />
+-        <path d="M12 18c0-2.2 1.9-4 4.2-4 .3 2.6-1.6 4.7-4.2 5" />
+-      </g>
+-    </svg>
++    <img
++      src="/sage-logo.png"
++      alt="SAGE"
++      className={className}
++      draggable={false}
++      loading="eager"
++    />
+   );
+ }
+ 
+diff --git a/frontend/src/components/sage/Sidebar.tsx b/frontend/src/components/sage/Sidebar.tsx
+index 2a7a268..1952d6e 100644
+--- a/frontend/src/components/sage/Sidebar.tsx
++++ b/frontend/src/components/sage/Sidebar.tsx
+@@ -40,7 +40,7 @@ export function Sidebar({
+         />
+       )}
+       <aside
+-        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:translate-x-0 ${
++        className={`sidebar-texture fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:translate-x-0 ${
+           open ? "translate-x-0" : "-translate-x-full"
+         } ${open ? "" : "md:w-0 md:overflow-hidden md:border-r-0"}`}
+       >
+@@ -123,7 +123,6 @@ export function Sidebar({
+             </div>
+             <div className="min-w-0">
+               <p className="truncate text-sm">You</p>
+-              <p className="text-xs text-muted-foreground">Free plan</p>
+             </div>
+           </div>
+         </div>
+diff --git a/frontend/src/routes/__root.tsx b/frontend/src/routes/__root.tsx
+index 8d8bdc2..e289a0d 100644
+--- a/frontend/src/routes/__root.tsx
++++ b/frontend/src/routes/__root.tsx
+@@ -77,21 +77,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
+     meta: [
+       { charSet: "utf-8" },
+       { name: "viewport", content: "width=device-width, initial-scale=1" },
+-      { title: "Lovable App" },
+-      { name: "description", content: "Lovable Generated Project" },
+-      { name: "author", content: "Lovable" },
+-      { property: "og:title", content: "Lovable App" },
+-      { property: "og:description", content: "Lovable Generated Project" },
++      { title: "SAGE" },
++      { name: "description", content: "SAGE — Your AI thinking partner" },
++      { name: "author", content: "SAGE" },
++      { property: "og:title", content: "SAGE" },
++      { property: "og:description", content: "SAGE — Your AI thinking partner" },
+       { property: "og:type", content: "website" },
+       { name: "twitter:card", content: "summary_large_image" },
+-      { name: "twitter:site", content: "@Lovable" },
++      { name: "twitter:site", content: "@SAGE" },
+     ],
+     links: [
+       {
+         rel: "stylesheet",
+         href: appCss,
+       },
+-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
++      { rel: "icon", href: "/sage-logo.png", type: "image/png" },
+     ],
+   }),
+   shellComponent: RootShell,
+diff --git a/frontend/src/routes/index.tsx b/frontend/src/routes/index.tsx
+index e2c7bb1..69234ed 100644
+--- a/frontend/src/routes/index.tsx
++++ b/frontend/src/routes/index.tsx
+@@ -122,6 +122,7 @@ function SagePage() {
+       setStreaming(true);
+ 
+       const assistantId = uid();
++      let intentionallyAborted = false;
+       updateChat(chatId, (chat) => ({
+         ...chat,
+         messages: [
+@@ -262,7 +263,9 @@ function SagePage() {
+         }
+       } catch (error) {
+         const isAbort = (error as Error)?.name === "AbortError";
+-        if (!isAbort) {
++        if (isAbort) {
++          intentionallyAborted = true;
++        } else {
+           const errMsg = (error as Error)?.message || "Connection interrupted.";
+           toast.error(errMsg);
+           updateChat(chatId, (chat) => ({
+@@ -286,6 +289,11 @@ function SagePage() {
+         abortRef.current = null;
+         flushChats(chatsRef.current);
+ 
++        if (intentionallyAborted) {
++          retryCountRef.current = 0;
++          return;
++        }
++
+         // ── Response confirmation: auto-retry on empty response ──
+         const finalChat = chatsRef.current.find((c) => c.id === chatId);
+         const lastMsg = finalChat?.messages[finalChat.messages.length - 1];
+@@ -466,18 +474,7 @@ function SagePage() {
+               <PanelLeft className="h-4 w-4" />
+             </Button>
+           )}
+-          <p className="truncate font-serif text-sm text-muted-foreground">
+-            {activeChat?.title ?? "New chat"}
+-          </p>
+-          <Button
+-            variant="ghost"
+-            size="icon"
+-            className="ml-auto h-8 w-8"
+-            aria-label="New chat"
+-            onClick={newChat}
+-          >
+-            <Plus className="h-4 w-4" />
+-          </Button>
++         
+         </header>
+ 
+         {messages.length === 0 ? (
+diff --git a/frontend/src/styles.css b/frontend/src/styles.css
+index 4e577e2..b3718cf 100644
+--- a/frontend/src/styles.css
++++ b/frontend/src/styles.css
+@@ -68,76 +68,79 @@
+   --radius: 0.75rem;
+   --font-serif: "Georgia", "Times New Roman", serif;
+ 
+-  --background: oklch(0.985 0.008 91);
+-  --foreground: oklch(0.28 0.012 60);
+-  --card: oklch(1 0.003 91);
+-  --card-foreground: oklch(0.28 0.012 60);
+-  --popover: oklch(0.995 0.005 91);
+-  --popover-foreground: oklch(0.28 0.012 60);
+-  --primary: oklch(0.63 0.135 42);
+-  --primary-foreground: oklch(0.99 0.006 91);
+-  --secondary: oklch(0.955 0.011 88);
+-  --secondary-foreground: oklch(0.34 0.014 60);
+-  --muted: oklch(0.955 0.011 88);
+-  --muted-foreground: oklch(0.53 0.014 62);
+-  --accent: oklch(0.94 0.016 84);
+-  --accent-foreground: oklch(0.3 0.014 60);
++  --background: oklch(0.982 0.0041 91.45);
++  --foreground: oklch(0.4165 0.0813 141.49);
++  --card: oklch(0.992 0.006 92.1);
++  --card-foreground: oklch(0.4165 0.0813 141.49);
++  --popover: oklch(0.992 0.006 92.1);
++  --popover-foreground: oklch(0.4165 0.0813 141.49);
++  --primary: oklch(0.5956 0.0985 161.39);
++  --primary-foreground: oklch(0.982 0.0041 91.45);
++  --secondary: oklch(0.744 0.076 128.8);
++  --secondary-foreground: oklch(0.4165 0.0813 141.49);
++  --muted: oklch(0.912 0.04 126.5);
++  --muted-foreground: oklch(0.458 0.072 141.49);
++  --accent: oklch(0.9398 0.1072 112.28);
++  --accent-foreground: oklch(0.4165 0.0813 141.49);
+   --destructive: oklch(0.55 0.2 27);
+   --destructive-foreground: oklch(0.99 0.005 91);
+-  --border: oklch(0.9 0.012 84);
+-  --input: oklch(0.9 0.012 84);
+-  --ring: oklch(0.63 0.135 42);
+-  --chart-1: oklch(0.63 0.135 42);
+-  --chart-2: oklch(0.6 0.118 184.704);
+-  --chart-3: oklch(0.398 0.07 227.392);
+-  --chart-4: oklch(0.828 0.189 84.429);
+-  --chart-5: oklch(0.769 0.188 70.08);
+-  --sidebar: oklch(0.955 0.013 86);
+-  --sidebar-foreground: oklch(0.32 0.012 60);
+-  --sidebar-primary: oklch(0.63 0.135 42);
+-  --sidebar-primary-foreground: oklch(0.99 0.006 91);
+-  --sidebar-accent: oklch(0.915 0.016 84);
+-  --sidebar-accent-foreground: oklch(0.28 0.012 60);
+-  --sidebar-border: oklch(0.89 0.014 84);
+-  --sidebar-ring: oklch(0.63 0.135 42);
++  --border: oklch(0.746 0.066 141.49);
++  --input: oklch(0.912 0.04 126.5);
++  --ring: oklch(0.5956 0.0985 161.39);
++  --chart-1: oklch(0.4165 0.0813 141.49);
++  --chart-2: oklch(0.5956 0.0985 161.39);
++  --chart-3: oklch(0.6968 0.1144 123.04);
++  --chart-4: oklch(0.9398 0.1072 112.28);
++  --chart-5: oklch(0.516 0.08 141.49);
++  --sidebar: oklch(0.968 0.026 122);
++  --sidebar-foreground: oklch(0.4165 0.0813 141.49);
++  --sidebar-primary: oklch(0.5956 0.0985 161.39);
++  --sidebar-primary-foreground: oklch(0.982 0.0041 91.45);
++  --sidebar-accent: oklch(0.91 0.05 118);
++  --sidebar-accent-foreground: oklch(0.4165 0.0813 141.49);
++  --sidebar-border: oklch(0.75 0.06 141.49);
++  --sidebar-ring: oklch(0.5956 0.0985 161.39);
+ 
+-  --user-bubble: oklch(0.93 0.018 85);
+-  --user-bubble-foreground: oklch(0.28 0.012 60);
++  --user-bubble: oklch(0.9 0.06 118.5);
++  --user-bubble-foreground: oklch(0.4165 0.0813 141.49);
+ }
+ 
+ .dark {
+-  --background: oklch(0.129 0.042 264.695);
+-  --foreground: oklch(0.984 0.003 247.858);
+-  --card: oklch(0.208 0.042 265.755);
+-  --card-foreground: oklch(0.984 0.003 247.858);
+-  --popover: oklch(0.208 0.042 265.755);
+-  --popover-foreground: oklch(0.984 0.003 247.858);
+-  --primary: oklch(0.929 0.013 255.508);
+-  --primary-foreground: oklch(0.208 0.042 265.755);
+-  --secondary: oklch(0.279 0.041 260.031);
+-  --secondary-foreground: oklch(0.984 0.003 247.858);
+-  --muted: oklch(0.279 0.041 260.031);
+-  --muted-foreground: oklch(0.704 0.04 256.788);
+-  --accent: oklch(0.279 0.041 260.031);
+-  --accent-foreground: oklch(0.984 0.003 247.858);
++  --background: oklch(0.4165 0.0813 141.49);
++  --foreground: oklch(0.982 0.0041 91.45);
++  --card: oklch(0.473 0.062 141.49);
++  --card-foreground: oklch(0.982 0.0041 91.45);
++  --popover: oklch(0.473 0.062 141.49);
++  --popover-foreground: oklch(0.982 0.0041 91.45);
++  --primary: oklch(0.5956 0.0985 161.39);
++  --primary-foreground: oklch(0.982 0.0041 91.45);
++  --secondary: oklch(0.558 0.082 161.39);
++  --secondary-foreground: oklch(0.982 0.0041 91.45);
++  --muted: oklch(0.505 0.064 141.49);
++  --muted-foreground: oklch(0.94 0.018 92);
++  --accent: oklch(0.9398 0.1072 112.28);
++  --accent-foreground: oklch(0.4165 0.0813 141.49);
+   --destructive: oklch(0.704 0.191 22.216);
+   --destructive-foreground: oklch(0.984 0.003 247.858);
+-  --border: oklch(1 0 0 / 10%);
+-  --input: oklch(1 0 0 / 15%);
+-  --ring: oklch(0.551 0.027 264.364);
+-  --chart-1: oklch(0.488 0.243 264.376);
+-  --chart-2: oklch(0.696 0.17 162.48);
+-  --chart-3: oklch(0.769 0.188 70.08);
+-  --chart-4: oklch(0.627 0.265 303.9);
+-  --chart-5: oklch(0.645 0.246 16.439);
+-  --sidebar: oklch(0.208 0.042 265.755);
+-  --sidebar-foreground: oklch(0.984 0.003 247.858);
+-  --sidebar-primary: oklch(0.488 0.243 264.376);
+-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+-  --sidebar-accent: oklch(0.279 0.041 260.031);
+-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+-  --sidebar-border: oklch(1 0 0 / 10%);
+-  --sidebar-ring: oklch(0.551 0.027 264.364);
++  --border: oklch(0.68 0.08 154.5);
++  --input: oklch(0.55 0.076 141.49);
++  --ring: oklch(0.6968 0.1144 123.04);
++  --chart-1: oklch(0.4165 0.0813 141.49);
++  --chart-2: oklch(0.5956 0.0985 161.39);
++  --chart-3: oklch(0.6968 0.1144 123.04);
++  --chart-4: oklch(0.9398 0.1072 112.28);
++  --chart-5: oklch(0.74 0.086 145.6);
++  --sidebar: oklch(0.45 0.065 141.49);
++  --sidebar-foreground: oklch(0.982 0.0041 91.45);
++  --sidebar-primary: oklch(0.5956 0.0985 161.39);
++  --sidebar-primary-foreground: oklch(0.982 0.0041 91.45);
++  --sidebar-accent: oklch(0.55 0.08 161.39);
++  --sidebar-accent-foreground: oklch(0.982 0.0041 91.45);
++  --sidebar-border: oklch(0.66 0.08 141.49);
++  --sidebar-ring: oklch(0.6968 0.1144 123.04);
++
++  --user-bubble: oklch(0.54 0.075 155.5);
++  --user-bubble-foreground: oklch(0.982 0.0041 91.45);
+ }
+ 
+ @layer base {
+@@ -151,6 +154,37 @@
+   }
+ }
+ 
++@layer components {
++  .sidebar-texture {
++    position: relative;
++    background-color: var(--sidebar);
++    isolation: isolate;
++    overflow: hidden;
++  }
++
++  .sidebar-texture::before {
++    content: "";
++    position: absolute;
++    inset: -12%;
++    background:
++      radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.32) 0 1.6%, transparent 2% 100%),
++      radial-gradient(circle at 72% 24%, rgba(255, 255, 255, 0.22) 0 2.2%, transparent 2.5% 100%),
++      radial-gradient(circle at 44% 72%, rgba(255, 255, 255, 0.2) 0 2.2%, transparent 2.5% 100%),
++      repeating-radial-gradient(circle at 25% 30%, rgba(255, 255, 255, 0.18) 0 1.2px, transparent 1.2px 18px),
++      linear-gradient(135deg, rgba(49, 87, 44, 0.12), rgba(64, 145, 108, 0.18), rgba(144, 169, 85, 0.12));
++    background-size: 170% 170%, 160% 160%, 180% 180%, 120% 120%, 100% 100%;
++    opacity: 0.42;
++    filter: blur(1.2px) saturate(1.15);
++    pointer-events: none;
++    z-index: 0;
++  }
++
++  .sidebar-texture > * {
++    position: relative;
++    z-index: 1;
++  }
++}
++
+ @layer base {
+   .sage-prose {
+     line-height: 1.7;

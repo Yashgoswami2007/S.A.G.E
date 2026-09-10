@@ -122,6 +122,7 @@ function SagePage() {
       setStreaming(true);
 
       const assistantId = uid();
+      let intentionallyAborted = false;
       updateChat(chatId, (chat) => ({
         ...chat,
         messages: [
@@ -262,7 +263,9 @@ function SagePage() {
         }
       } catch (error) {
         const isAbort = (error as Error)?.name === "AbortError";
-        if (!isAbort) {
+        if (isAbort) {
+          intentionallyAborted = true;
+        } else {
           const errMsg = (error as Error)?.message || "Connection interrupted.";
           toast.error(errMsg);
           updateChat(chatId, (chat) => ({
@@ -285,6 +288,11 @@ function SagePage() {
         setStreaming(false);
         abortRef.current = null;
         flushChats(chatsRef.current);
+
+        if (intentionallyAborted) {
+          retryCountRef.current = 0;
+          return;
+        }
 
         // ── Response confirmation: auto-retry on empty response ──
         const finalChat = chatsRef.current.find((c) => c.id === chatId);
@@ -466,18 +474,7 @@ function SagePage() {
               <PanelLeft className="h-4 w-4" />
             </Button>
           )}
-          <p className="truncate font-serif text-sm text-muted-foreground">
-            {activeChat?.title ?? "New chat"}
-          </p>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="ml-auto h-8 w-8"
-            aria-label="New chat"
-            onClick={newChat}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+         
         </header>
 
         {messages.length === 0 ? (

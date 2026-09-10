@@ -40,7 +40,7 @@ export function Sidebar({
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:translate-x-0 ${
+        className={`sidebar-texture fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-200 md:static md:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         } ${open ? "" : "md:w-0 md:overflow-hidden md:border-r-0"}`}
       >
@@ -123,7 +123,6 @@ export function Sidebar({
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm">You</p>
-              <p className="text-xs text-muted-foreground">Free plan</p>
             </div>
           </div>
         </div>
