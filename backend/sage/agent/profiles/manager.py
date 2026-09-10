@@ -18,7 +18,7 @@ class ProfileManager:
                 "read_file", "list_dir", "search_files", "get_file_info",
                 "read_pdf", "read_docx", "read_xlsx", "read_image", "ocr_extract",
                 "calculator",
-                "generate_docx", "generate_xlsx",
+                "generate_docx", "generate_xlsx", "generate_pdf",
             }
         )
 
@@ -33,7 +33,7 @@ class ProfileManager:
                 "search_files", "get_file_info", "apply_patch",
                 "execute_command", "execute_code", "run_script",
                 "read_pdf", "read_docx", "read_xlsx", "read_image", "ocr_extract",
-                "generate_docx", "generate_xlsx", "generate_pptx",
+                "generate_docx", "generate_xlsx", "generate_pptx", "generate_pdf",
                 "calculator",
             }
         )
@@ -47,7 +47,7 @@ class ProfileManager:
             allowed_tools={
                 "read_file", "list_dir", "search_files", "get_file_info",
                 "read_pdf", "read_image", "ocr_extract",
-                "generate_docx",
+                "generate_docx", "generate_pdf",
             }
         )
 
@@ -61,7 +61,7 @@ class ProfileManager:
                 "read_file", "list_dir", "search_files", "get_file_info",
                 "read_pdf", "read_docx", "read_xlsx", "read_image", "ocr_extract",
                 "calculator",
-                "generate_docx", "generate_xlsx", "generate_pptx",
+                "generate_docx", "generate_xlsx", "generate_pptx", "generate_pdf",
             }
         )
 

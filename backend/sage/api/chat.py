@@ -63,6 +63,7 @@ class CompletionRequest(BaseModel):
     task_id: Optional[str] = None
     file_attachments: Optional[List[str]] = None
     model_id: Optional[str] = None
+    history: Optional[List[Dict[str, str]]] = None
 
 @router.post("/completions")
 async def create_chat_completion(req: CompletionRequest, request: Request):
@@ -74,7 +75,8 @@ async def create_chat_completion(req: CompletionRequest, request: Request):
             profile_name=req.profile,
             task_id=req.task_id,
             file_attachments=req.file_attachments,
-            model_id=req.model_id
+            model_id=req.model_id,
+            history=req.history
         )
         store_task_result(response)
         return {
@@ -97,6 +99,7 @@ class StreamRequest(BaseModel):
     model_id: Optional[str] = None
     granted_paths: Optional[List[dict]] = None
     file_attachments: Optional[List[str]] = None
+    history: Optional[List[Dict[str, str]]] = None
 
 @router.post("/stream")
 async def chat_stream(req: StreamRequest, request: Request):
@@ -131,6 +134,7 @@ async def chat_stream(req: StreamRequest, request: Request):
                     profile_name=req.profile,
                     file_attachments=req.file_attachments,
                     model_id=req.model_id,
+                    history=req.history,
                     stream_callback=stream_callback,
                     require_approval_for_high_risk=True
                 )

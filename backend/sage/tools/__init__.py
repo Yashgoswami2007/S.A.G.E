@@ -20,6 +20,7 @@ from sage.tools.document_generators import (
     GenerateDocxTool,
     GenerateXlsxTool,
     GeneratePptxTool,
+    GeneratePdfTool,
 )
 from sage.tools.calculator import CalculatorTool
 
@@ -47,10 +48,11 @@ def create_default_tool_registry() -> ToolRegistry:
     registry.register(ReadImageTool())
     registry.register(OCRExtractTool())
 
-    # Document Generators (3 tools)
+    # Document Generators (4 tools)
     registry.register(GenerateDocxTool())
     registry.register(GenerateXlsxTool())
     registry.register(GeneratePptxTool())
+    registry.register(GeneratePdfTool())
 
     # Utilities (1 tool)
     registry.register(CalculatorTool())

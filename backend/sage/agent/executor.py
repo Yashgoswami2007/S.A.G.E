@@ -3,7 +3,7 @@ import re
 import time
 import json
 import logging
-from typing import Callable, Optional, Awaitable, Any
+from typing import Callable, Optional, Awaitable, Any, List, Dict
 from sage.agent.state import AgentState, ExecutionTrace, TraceEvent
 from sage.agent.schemas import AgentResponse, Plan
 from sage.agent.profiles.manager import ProfileManager
@@ -43,7 +43,8 @@ class ReActExecutor:
         file_attachments: Optional[list] = None,
         model_id: Optional[str] = None,
         stream_callback: Optional[StreamCallback] = None,
-        require_approval_for_high_risk: bool = True
+        require_approval_for_high_risk: bool = True,
+        history: Optional[List[Dict[str, str]]] = None
     ) -> AgentResponse:
         task_id = task_id or generate_id()
         profile = self.profile_manager.get_profile(profile_name)
@@ -177,6 +178,7 @@ class ReActExecutor:
                 prompt, profile, client, llm_model_id,
                 circuit_breaker_key=cb_key,
                 tool_registry=self.tool_registry,
+                history=history,
             )
         except Exception as plan_err:
             logger.warning(
@@ -190,6 +192,7 @@ class ReActExecutor:
                     prompt, profile, client, llm_model_id,
                     circuit_breaker_key=cb_key,
                     tool_registry=self.tool_registry,
+                    history=history,
                 )
             except Exception as fb_err:
                 logger.error(f"Fallback planning also failed: {fb_err}")
@@ -418,6 +421,9 @@ class ReActExecutor:
                     }
                 ]
                 
+                if history:
+                    messages.extend(history)
+                
                 if vision_images and model_config.supports_vision:
                     # Construct OpenAI multimodal content array
                     content_parts = [{"type": "text", "text": prompt}]
@@ -606,9 +612,12 @@ class ReActExecutor:
                     "One or more tool steps failed during execution. "
                     "Use whatever observations are available to give the user a helpful answer. "
                     "Acknowledge which steps failed and explain what you can still provide."
-                )},
-                {"role": "user", "content": prompt},
+                )}
             ]
+            if history:
+                fr_messages.extend(history)
+            fr_messages.append({"role": "user", "content": prompt})
+            
             _append_tool_context(fr_messages)
             for evt in trace.events:
                 if evt.agent_state == AgentState.REFLECTING and evt.error:

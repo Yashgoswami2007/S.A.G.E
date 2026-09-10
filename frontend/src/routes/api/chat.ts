@@ -42,6 +42,17 @@ export const Route = createFileRoute("/api/chat")({
           }
         }
 
+        const history = messages.slice(0, -1).map((msg) => ({
+          role: msg.role,
+          content:
+            typeof msg.content === "string"
+              ? msg.content
+              : msg.content
+                  .filter((part: any) => part.type === "text")
+                  .map((part: any) => part.text)
+                  .join("\n"),
+        })).filter(msg => msg.content && msg.content.trim().length > 0);
+
         console.log("[PROXY] Sending upstream request to /api/chat/stream...");
         console.log("[PROXY] file_attachments:", file_attachments);
 
@@ -59,6 +70,7 @@ export const Route = createFileRoute("/api/chat")({
               model_id: body.model_id || null,
               granted_paths: body.granted_paths,
               file_attachments: file_attachments,
+              history: history,
             }),
           });
         } catch (fetchErr: any) {

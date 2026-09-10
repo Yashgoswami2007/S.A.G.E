@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 from sage.agent.schemas import Plan, Step
 from sage.models.client import OpenAICompatibleClient
 from sage.agent.profiles.base import AgentProfile
@@ -63,6 +63,7 @@ class Planner:
         circuit_breaker_key: Optional[str] = None,
         *,
         tool_registry,
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> Plan:
         """
         Generates an initial structured step-by-step plan for the user prompt using the LLM.
@@ -76,6 +77,18 @@ class Planner:
             raise ValueError("tool_registry is required for Planner.create_plan()")
 
         tool_section = self._format_tool_schemas(profile, tool_registry)
+        
+        history_block = ""
+        if history:
+            history_lines = [f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}" for msg in history]
+            history_text = "\n".join(history_lines)
+            history_block = (
+                "Previous conversation:\n"
+                f"{history_text}\n\n"
+                "Use the previous conversation to resolve references such as: "
+                "'another one', 'that', 'make it shorter', 'change the second option', etc. "
+                "The current user request takes priority.\n\n"
+            )
 
         system_prompt = (
             f"You are a task planner for the '{profile.name}' agent profile. "
@@ -92,6 +105,7 @@ class Planner:
             '    }\n'
             "  ]\n"
             "}\n\n"
+            f"{history_block}"
             f"{tool_section}\n"
             "IMPORTANT:\n"
             "- Use ONLY the exact parameters listed for the selected tool.\n"

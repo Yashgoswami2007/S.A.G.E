@@ -35,6 +35,9 @@ dependencies = [
     # Document generation
     "docxtpl>=0.18.0",
     "python-pptx>=1.0.0",
+    # PDF generation (Markdown → HTML → PDF)
+    "markdown>=3.5.0",
+    "xhtml2pdf>=0.2.11",
     # File uploads
     "python-multipart>=0.0.9",
 ]

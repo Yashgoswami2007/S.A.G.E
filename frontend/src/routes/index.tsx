@@ -122,6 +122,7 @@ function SagePage() {
       setStreaming(true);
 
       const assistantId = uid();
+      let intentionallyAborted = false;
       updateChat(chatId, (chat) => ({
         ...chat,
         messages: [
@@ -166,16 +167,16 @@ function SagePage() {
             messages: chat.messages.map((m) =>
               m.id === assistantId
                 ? {
-                    ...m,
-                    events: [
-                      ...(m.events || []),
-                      {
-                        type: "ERROR",
-                        message: detail || `Request failed with status ${response.status}. Please check backend logs or retry.`,
-                        recoverable: true,
-                      },
-                    ],
-                  }
+                  ...m,
+                  events: [
+                    ...(m.events || []),
+                    {
+                      type: "ERROR",
+                      message: detail || `Request failed with status ${response.status}. Please check backend logs or retry.`,
+                      recoverable: true,
+                    },
+                  ],
+                }
                 : m
             ),
           }));
@@ -185,7 +186,7 @@ function SagePage() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let acc = "";
-        
+
         const processLines = (linesToProcess: string[]) => {
           let chunkTokens = "";
           const chunkEvents: AgentEvent[] = [];
@@ -199,7 +200,7 @@ function SagePage() {
               continue;
             }
             console.log("[FRONTEND] parsed event.type:", event.type);
-            
+
             if (event.type === "TOKEN") {
               chunkTokens += event.token;
             } else {
@@ -245,7 +246,7 @@ function SagePage() {
           }
         };
 
-        for (;;) {
+        for (; ;) {
           const { done, value } = await reader.read();
           if (value) {
             acc += decoder.decode(value, { stream: true });
@@ -262,7 +263,9 @@ function SagePage() {
         }
       } catch (error) {
         const isAbort = (error as Error)?.name === "AbortError";
-        if (!isAbort) {
+        if (isAbort) {
+          intentionallyAborted = true;
+        } else {
           const errMsg = (error as Error)?.message || "Connection interrupted.";
           toast.error(errMsg);
           updateChat(chatId, (chat) => ({
@@ -286,6 +289,11 @@ function SagePage() {
         abortRef.current = null;
         flushChats(chatsRef.current);
 
+        if (intentionallyAborted) {
+          retryCountRef.current = 0;
+          return;
+        }
+
         // ── Response confirmation: auto-retry on empty response ──
         const finalChat = chatsRef.current.find((c) => c.id === chatId);
         const lastMsg = finalChat?.messages[finalChat.messages.length - 1];
@@ -303,7 +311,7 @@ function SagePage() {
                 response_content: lastMsg.content,
               }),
             });
-            
+
             if (resp.ok) {
               const data = await resp.json();
               if (data.needs_retry) {
@@ -387,7 +395,7 @@ function SagePage() {
     while (trimmed.length && trimmed[trimmed.length - 1]?.role === "assistant") trimmed.pop();
     if (!trimmed.length) return;
     updateChat(activeChat.id, (chat) => ({ ...chat, messages: trimmed }));
-    
+
     // Simplistic retry using current profile setting or general
     void run(activeChat.id, trimmed, profile === "auto" ? "general" : profile);
   }, [activeChat, run, updateChat, profile]);
@@ -466,18 +474,8 @@ function SagePage() {
               <PanelLeft className="h-4 w-4" />
             </Button>
           )}
-          <p className="truncate font-serif text-sm text-muted-foreground">
-            {activeChat?.title ?? "New chat"}
-          </p>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="ml-auto h-8 w-8"
-            aria-label="New chat"
-            onClick={newChat}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+
+
         </header>
 
         {messages.length === 0 ? (

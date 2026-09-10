@@ -123,7 +123,6 @@ export function Sidebar({
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm">You</p>
-              <p className="text-xs text-muted-foreground">Free plan</p>
             </div>
           </div>
         </div>

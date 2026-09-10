@@ -19,4 +19,6 @@ Pillow>=10.0.0
 pytesseract>=0.3.10
 docxtpl>=0.18.0
 python-pptx>=1.0.0
+markdown>=3.5.0
+xhtml2pdf>=0.2.11
 python-multipart>=0.0.9
