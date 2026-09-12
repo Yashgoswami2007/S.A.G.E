@@ -182,3 +182,44 @@ def detect_gpus(*, force_refresh: bool = False) -> GPUStatus:
         logger.info("No CUDA GPUs detected — models will run in CPU-only mode")
 
     return status
+
+
+def query_live_gpu_metrics() -> list[dict]:
+    """
+    Query live GPU metrics (utilization, used VRAM, temperature, power).
+    Returns a list of dicts, one per GPU.
+    """
+    cmd = [
+        "nvidia-smi",
+        "--query-gpu=index,utilization.gpu,memory.used,temperature.gpu,power.draw",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return []
+        
+        metrics = []
+        for line in result.stdout.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 5:
+                # Handle potential "Not Supported" values
+                def parse_float(v):
+                    try: return float(v)
+                    except ValueError: return 0.0
+                
+                def parse_int(v):
+                    try: return int(v)
+                    except ValueError: return 0
+
+                metrics.append({
+                    "gpu_index": parse_int(parts[0]),
+                    "utilization_percent": parse_int(parts[1]),
+                    "vram_used_mb": parse_int(parts[2]),
+                    "temperature_c": parse_int(parts[3]),
+                    "power_watts": parse_float(parts[4]),
+                })
+        return metrics
+    except Exception as exc:
+        logger.debug("Failed to query live GPU metrics", error=str(exc))
+        return []

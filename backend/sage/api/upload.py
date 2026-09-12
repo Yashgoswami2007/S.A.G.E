@@ -13,7 +13,7 @@ from typing import List
 import aiofiles
 from fastapi import APIRouter, File, Form, UploadFile
 
-from sage.config import settings
+import sage.workspace as _ws_module
 
 logger = logging.getLogger("sage.api.upload")
 
@@ -43,8 +43,8 @@ async def upload_files(
     return workspace-relative paths for use as file_attachments.
     """
     try:
-        workspace = Path(settings.WORKSPACE_DIR).resolve()
-        upload_dir = Path(settings.UPLOAD_DIR).resolve() / session_id
+        workspace = Path(_ws_module.workspace_manager.get_active_workspace()).resolve()
+        upload_dir = _ws_module.workspace_manager.resolve_path("uploads") / session_id
         upload_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         logger.error(f"Failed to create upload directory: {e}")

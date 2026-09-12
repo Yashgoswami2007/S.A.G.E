@@ -13,24 +13,19 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from sage.tools.base import BaseTool, ToolPermission, ToolResult
-from sage.config import settings
+import sage.workspace as _ws_module
 
 logger = logging.getLogger("sage.tools.document_generators")
 def _resolve_path(path_str: str) -> Path:
     """Resolves relative paths against workspace directory and enforces containment."""
-    base_dir = Path(settings.WORKSPACE_DIR).resolve()
-    target_path = (base_dir / path_str).resolve()
-
     try:
-        target_path.relative_to(base_dir)
-    except ValueError:
-        if not str(target_path).startswith(str(base_dir)):
-            return base_dir
-    return target_path
+        return _ws_module.workspace_manager.resolve_path(path_str)
+    except PermissionError:
+        return Path(_ws_module.workspace_manager.get_active_workspace()).resolve()
 
 def _output_path(filename: str, output_dir: Optional[str] = None) -> Path:
     """Resolve output path within the workspace."""
-    base_dir = Path(settings.WORKSPACE_DIR).resolve()
+    base_dir = Path(_ws_module.workspace_manager.get_active_workspace()).resolve()
     if output_dir:
         out_dir = (base_dir / output_dir).resolve()
     else:
@@ -40,8 +35,9 @@ def _output_path(filename: str, output_dir: Optional[str] = None) -> Path:
     try:
         out_dir.relative_to(base_dir)
     except ValueError:
-        out_dir = base_dir / "output"
-
+        if not str(out_dir).startswith(str(base_dir)):
+            out_dir = base_dir / "output"
+            
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / filename
 
@@ -121,7 +117,7 @@ class GenerateDocxTool(BaseTool):
 
             doc.save(str(out_path))
 
-            rel_path = str(out_path.relative_to(Path(settings.WORKSPACE_DIR).resolve()))
+            rel_path = str(out_path.relative_to(Path(_ws_module.workspace_manager.get_active_workspace()).resolve()))
             return ToolResult(
                 success=True,
                 output=f"Word document created: {rel_path} ({out_path.stat().st_size} bytes)",
@@ -215,7 +211,7 @@ class GenerateXlsxTool(BaseTool):
 
             wb.save(str(out_path))
 
-            rel_path = str(out_path.relative_to(Path(settings.WORKSPACE_DIR).resolve()))
+            rel_path = str(out_path.relative_to(Path(_ws_module.workspace_manager.get_active_workspace()).resolve()))
             return ToolResult(
                 success=True,
                 output=f"Excel spreadsheet created: {rel_path} ({out_path.stat().st_size} bytes)",
@@ -329,7 +325,7 @@ class GeneratePptxTool(BaseTool):
 
             prs.save(str(out_path))
 
-            rel_path = str(out_path.relative_to(Path(settings.WORKSPACE_DIR).resolve()))
+            rel_path = str(out_path.relative_to(Path(_ws_module.workspace_manager.get_active_workspace()).resolve()))
             return ToolResult(
                 success=True,
                 output=f"PowerPoint presentation created: {rel_path} ({out_path.stat().st_size} bytes, {len(slides) + 1} slides)",
@@ -508,7 +504,7 @@ class GeneratePdfTool(BaseTool):
             # Write to disk
             out_path.write_bytes(pdf_buffer.getvalue())
 
-            rel_path = str(out_path.relative_to(Path(settings.WORKSPACE_DIR).resolve()))
+            rel_path = str(out_path.relative_to(Path(_ws_module.workspace_manager.get_active_workspace()).resolve()))
             return ToolResult(
                 success=True,
                 output=f"PDF created successfully: {rel_path} ({out_path.stat().st_size} bytes)",

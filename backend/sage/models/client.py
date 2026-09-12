@@ -16,7 +16,7 @@ class OpenAICompatibleClient:
         messages: list[dict],
         tools: Optional[list] = None,
         temperature: float = 0.2,
-        max_tokens: int = 4096,  # increased: Qwen3 needs room for <think> + answer
+        max_tokens: int = 12288,  # increased: Qwen3 needs room for <think> + answer
         stream: bool = False,
         circuit_breaker_key: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -55,7 +55,7 @@ class OpenAICompatibleClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 if response.status_code != 200:
                     raise ModelError(
@@ -63,7 +63,16 @@ class OpenAICompatibleClient:
                         details={"model_id": cb_key, "status_code": response.status_code, "url": url}
                     )
                 global_circuit_breaker.record_success(cb_key)
-                return response.json()
+                resp_data = response.json()
+                
+                # Check for truncation
+                choices = resp_data.get("choices", [])
+                if choices:
+                    finish_reason = choices[0].get("finish_reason")
+                    if finish_reason == "length":
+                        resp_data["_truncated"] = True
+                        
+                return resp_data
         except Exception as e:
             global_circuit_breaker.record_failure(cb_key)
             if isinstance(e, ModelError):
@@ -75,7 +84,7 @@ class OpenAICompatibleClient:
                 )
             if isinstance(e, httpx.TimeoutException):
                 raise ModelError(
-                    f"Model inference timed out after 120s at {url}.",
+                    f"Model inference timed out after 600s at {url}.",
                     details={"model_id": cb_key, "url": url, "error": str(e)}
                 )
             raise ModelError(
@@ -89,7 +98,7 @@ class OpenAICompatibleClient:
         messages: list[dict],
         tools: Optional[list] = None,
         temperature: float = 0.2,
-        max_tokens: int = 4096,  # increased: Qwen3 needs room for <think> + answer
+        max_tokens: int = 12288,  # increased: Qwen3 needs room for <think> + answer
         circuit_breaker_key: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
@@ -123,7 +132,7 @@ class OpenAICompatibleClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()
@@ -147,6 +156,10 @@ class OpenAICompatibleClient:
                                     content = delta.get("content")
                                     if content:
                                         yield content
+                                        
+                                    finish_reason = choices[0].get("finish_reason")
+                                    if finish_reason == "length":
+                                        yield "\n\n[TRUNCATED_DUE_TO_LENGTH_LIMIT]"
                             except json.JSONDecodeError:
                                 pass
         except Exception as e:
@@ -160,7 +173,7 @@ class OpenAICompatibleClient:
                 )
             if isinstance(e, httpx.TimeoutException):
                 raise ModelError(
-                    f"Model stream timed out after 120s at {url}.",
+                    f"Model stream timed out after 600s at {url}.",
                     details={"model_id": cb_key, "url": url, "error": str(e)}
                 )
             raise ModelError(

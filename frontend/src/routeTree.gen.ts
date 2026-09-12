@@ -12,10 +12,19 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as ApiModelsRouteImport } from './routes/api/models'
+import { Route as ApiSettingsRouteImport } from './routes/api/settings'
 import { Route as ApiUploadRouteImport } from './routes/api/upload'
+import { Route as ApiWorkspaceRouteImport } from './routes/api/workspace'
 import { Route as ApiChatConfirmRouteImport } from './routes/api/chat.confirm'
 import { Route as ApiChatConfirmResponseRouteImport } from './routes/api/chat.confirm-response'
 import { Route as ApiModelsActivateRouteImport } from './routes/api/models.activate'
+import { Route as ApiSettingsResetRouteImport } from './routes/api/settings.reset'
+import { Route as ApiSystemStatsRouteImport } from './routes/api/system.stats'
+import { Route as ApiWorkspaceOpenFolderRouteImport } from './routes/api/workspace.open-folder'
+import { Route as ApiWorkspaceRecentRouteImport } from './routes/api/workspace.recent'
+import { Route as ApiWorkspaceResetRouteImport } from './routes/api/workspace.reset'
+import { Route as ApiWorkspaceSetRouteImport } from './routes/api/workspace.set'
+import { Route as ApiWorkspaceValidateRouteImport } from './routes/api/workspace.validate'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -32,9 +41,19 @@ const ApiModelsRoute = ApiModelsRouteImport.update({
   path: '/api/models',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSettingsRoute = ApiSettingsRouteImport.update({
+  id: '/api/settings',
+  path: '/api/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiUploadRoute = ApiUploadRouteImport.update({
   id: '/api/upload',
   path: '/api/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceRoute = ApiWorkspaceRouteImport.update({
+  id: '/api/workspace',
+  path: '/api/workspace',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiChatConfirmRoute = ApiChatConfirmRouteImport.update({
@@ -52,34 +71,96 @@ const ApiModelsActivateRoute = ApiModelsActivateRouteImport.update({
   path: '/activate',
   getParentRoute: () => ApiModelsRoute,
 } as any)
+const ApiSettingsResetRoute = ApiSettingsResetRouteImport.update({
+  id: '/reset',
+  path: '/reset',
+  getParentRoute: () => ApiSettingsRoute,
+} as any)
+const ApiSystemStatsRoute = ApiSystemStatsRouteImport.update({
+  id: '/api/system/stats',
+  path: '/api/system/stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWorkspaceOpenFolderRoute = ApiWorkspaceOpenFolderRouteImport.update({
+  id: '/open-folder',
+  path: '/open-folder',
+  getParentRoute: () => ApiWorkspaceRoute,
+} as any)
+const ApiWorkspaceRecentRoute = ApiWorkspaceRecentRouteImport.update({
+  id: '/recent',
+  path: '/recent',
+  getParentRoute: () => ApiWorkspaceRoute,
+} as any)
+const ApiWorkspaceResetRoute = ApiWorkspaceResetRouteImport.update({
+  id: '/reset',
+  path: '/reset',
+  getParentRoute: () => ApiWorkspaceRoute,
+} as any)
+const ApiWorkspaceSetRoute = ApiWorkspaceSetRouteImport.update({
+  id: '/set',
+  path: '/set',
+  getParentRoute: () => ApiWorkspaceRoute,
+} as any)
+const ApiWorkspaceValidateRoute = ApiWorkspaceValidateRouteImport.update({
+  id: '/validate',
+  path: '/validate',
+  getParentRoute: () => ApiWorkspaceRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
   '/api/models': typeof ApiModelsRouteWithChildren
+  '/api/settings': typeof ApiSettingsRouteWithChildren
   '/api/upload': typeof ApiUploadRoute
+  '/api/workspace': typeof ApiWorkspaceRouteWithChildren
   '/api/chat/confirm': typeof ApiChatConfirmRoute
   '/api/chat/confirm-response': typeof ApiChatConfirmResponseRoute
   '/api/models/activate': typeof ApiModelsActivateRoute
+  '/api/settings/reset': typeof ApiSettingsResetRoute
+  '/api/system/stats': typeof ApiSystemStatsRoute
+  '/api/workspace/open-folder': typeof ApiWorkspaceOpenFolderRoute
+  '/api/workspace/recent': typeof ApiWorkspaceRecentRoute
+  '/api/workspace/reset': typeof ApiWorkspaceResetRoute
+  '/api/workspace/set': typeof ApiWorkspaceSetRoute
+  '/api/workspace/validate': typeof ApiWorkspaceValidateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
   '/api/models': typeof ApiModelsRouteWithChildren
+  '/api/settings': typeof ApiSettingsRouteWithChildren
   '/api/upload': typeof ApiUploadRoute
+  '/api/workspace': typeof ApiWorkspaceRouteWithChildren
   '/api/chat/confirm': typeof ApiChatConfirmRoute
   '/api/chat/confirm-response': typeof ApiChatConfirmResponseRoute
   '/api/models/activate': typeof ApiModelsActivateRoute
+  '/api/settings/reset': typeof ApiSettingsResetRoute
+  '/api/system/stats': typeof ApiSystemStatsRoute
+  '/api/workspace/open-folder': typeof ApiWorkspaceOpenFolderRoute
+  '/api/workspace/recent': typeof ApiWorkspaceRecentRoute
+  '/api/workspace/reset': typeof ApiWorkspaceResetRoute
+  '/api/workspace/set': typeof ApiWorkspaceSetRoute
+  '/api/workspace/validate': typeof ApiWorkspaceValidateRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
   '/api/models': typeof ApiModelsRouteWithChildren
+  '/api/settings': typeof ApiSettingsRouteWithChildren
   '/api/upload': typeof ApiUploadRoute
+  '/api/workspace': typeof ApiWorkspaceRouteWithChildren
   '/api/chat/confirm': typeof ApiChatConfirmRoute
   '/api/chat/confirm-response': typeof ApiChatConfirmResponseRoute
   '/api/models/activate': typeof ApiModelsActivateRoute
+  '/api/settings/reset': typeof ApiSettingsResetRoute
+  '/api/system/stats': typeof ApiSystemStatsRoute
+  '/api/workspace/open-folder': typeof ApiWorkspaceOpenFolderRoute
+  '/api/workspace/recent': typeof ApiWorkspaceRecentRoute
+  '/api/workspace/reset': typeof ApiWorkspaceResetRoute
+  '/api/workspace/set': typeof ApiWorkspaceSetRoute
+  '/api/workspace/validate': typeof ApiWorkspaceValidateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -87,35 +168,65 @@ export interface FileRouteTypes {
     | '/'
     | '/api/chat'
     | '/api/models'
+    | '/api/settings'
     | '/api/upload'
+    | '/api/workspace'
     | '/api/chat/confirm'
     | '/api/chat/confirm-response'
     | '/api/models/activate'
+    | '/api/settings/reset'
+    | '/api/system/stats'
+    | '/api/workspace/open-folder'
+    | '/api/workspace/recent'
+    | '/api/workspace/reset'
+    | '/api/workspace/set'
+    | '/api/workspace/validate'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/api/chat'
     | '/api/models'
+    | '/api/settings'
     | '/api/upload'
+    | '/api/workspace'
     | '/api/chat/confirm'
     | '/api/chat/confirm-response'
     | '/api/models/activate'
+    | '/api/settings/reset'
+    | '/api/system/stats'
+    | '/api/workspace/open-folder'
+    | '/api/workspace/recent'
+    | '/api/workspace/reset'
+    | '/api/workspace/set'
+    | '/api/workspace/validate'
   id:
     | '__root__'
     | '/'
     | '/api/chat'
     | '/api/models'
+    | '/api/settings'
     | '/api/upload'
+    | '/api/workspace'
     | '/api/chat/confirm'
     | '/api/chat/confirm-response'
     | '/api/models/activate'
+    | '/api/settings/reset'
+    | '/api/system/stats'
+    | '/api/workspace/open-folder'
+    | '/api/workspace/recent'
+    | '/api/workspace/reset'
+    | '/api/workspace/set'
+    | '/api/workspace/validate'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiChatRoute: typeof ApiChatRouteWithChildren
   ApiModelsRoute: typeof ApiModelsRouteWithChildren
+  ApiSettingsRoute: typeof ApiSettingsRouteWithChildren
   ApiUploadRoute: typeof ApiUploadRoute
+  ApiWorkspaceRoute: typeof ApiWorkspaceRouteWithChildren
+  ApiSystemStatsRoute: typeof ApiSystemStatsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -141,11 +252,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/settings': {
+      id: '/api/settings'
+      path: '/api/settings'
+      fullPath: '/api/settings'
+      preLoaderRoute: typeof ApiSettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/upload': {
       id: '/api/upload'
       path: '/api/upload'
       fullPath: '/api/upload'
       preLoaderRoute: typeof ApiUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace': {
+      id: '/api/workspace'
+      path: '/api/workspace'
+      fullPath: '/api/workspace'
+      preLoaderRoute: typeof ApiWorkspaceRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/chat/confirm': {
@@ -168,6 +293,55 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/models/activate'
       preLoaderRoute: typeof ApiModelsActivateRouteImport
       parentRoute: typeof ApiModelsRoute
+    }
+    '/api/settings/reset': {
+      id: '/api/settings/reset'
+      path: '/reset'
+      fullPath: '/api/settings/reset'
+      preLoaderRoute: typeof ApiSettingsResetRouteImport
+      parentRoute: typeof ApiSettingsRoute
+    }
+    '/api/system/stats': {
+      id: '/api/system/stats'
+      path: '/api/system/stats'
+      fullPath: '/api/system/stats'
+      preLoaderRoute: typeof ApiSystemStatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/workspace/open-folder': {
+      id: '/api/workspace/open-folder'
+      path: '/open-folder'
+      fullPath: '/api/workspace/open-folder'
+      preLoaderRoute: typeof ApiWorkspaceOpenFolderRouteImport
+      parentRoute: typeof ApiWorkspaceRoute
+    }
+    '/api/workspace/recent': {
+      id: '/api/workspace/recent'
+      path: '/recent'
+      fullPath: '/api/workspace/recent'
+      preLoaderRoute: typeof ApiWorkspaceRecentRouteImport
+      parentRoute: typeof ApiWorkspaceRoute
+    }
+    '/api/workspace/reset': {
+      id: '/api/workspace/reset'
+      path: '/reset'
+      fullPath: '/api/workspace/reset'
+      preLoaderRoute: typeof ApiWorkspaceResetRouteImport
+      parentRoute: typeof ApiWorkspaceRoute
+    }
+    '/api/workspace/set': {
+      id: '/api/workspace/set'
+      path: '/set'
+      fullPath: '/api/workspace/set'
+      preLoaderRoute: typeof ApiWorkspaceSetRouteImport
+      parentRoute: typeof ApiWorkspaceRoute
+    }
+    '/api/workspace/validate': {
+      id: '/api/workspace/validate'
+      path: '/validate'
+      fullPath: '/api/workspace/validate'
+      preLoaderRoute: typeof ApiWorkspaceValidateRouteImport
+      parentRoute: typeof ApiWorkspaceRoute
     }
   }
 }
@@ -197,11 +371,46 @@ const ApiModelsRouteWithChildren = ApiModelsRoute._addFileChildren(
   ApiModelsRouteChildren,
 )
 
+interface ApiSettingsRouteChildren {
+  ApiSettingsResetRoute: typeof ApiSettingsResetRoute
+}
+
+const ApiSettingsRouteChildren: ApiSettingsRouteChildren = {
+  ApiSettingsResetRoute: ApiSettingsResetRoute,
+}
+
+const ApiSettingsRouteWithChildren = ApiSettingsRoute._addFileChildren(
+  ApiSettingsRouteChildren,
+)
+
+interface ApiWorkspaceRouteChildren {
+  ApiWorkspaceOpenFolderRoute: typeof ApiWorkspaceOpenFolderRoute
+  ApiWorkspaceRecentRoute: typeof ApiWorkspaceRecentRoute
+  ApiWorkspaceResetRoute: typeof ApiWorkspaceResetRoute
+  ApiWorkspaceSetRoute: typeof ApiWorkspaceSetRoute
+  ApiWorkspaceValidateRoute: typeof ApiWorkspaceValidateRoute
+}
+
+const ApiWorkspaceRouteChildren: ApiWorkspaceRouteChildren = {
+  ApiWorkspaceOpenFolderRoute: ApiWorkspaceOpenFolderRoute,
+  ApiWorkspaceRecentRoute: ApiWorkspaceRecentRoute,
+  ApiWorkspaceResetRoute: ApiWorkspaceResetRoute,
+  ApiWorkspaceSetRoute: ApiWorkspaceSetRoute,
+  ApiWorkspaceValidateRoute: ApiWorkspaceValidateRoute,
+}
+
+const ApiWorkspaceRouteWithChildren = ApiWorkspaceRoute._addFileChildren(
+  ApiWorkspaceRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiChatRoute: ApiChatRouteWithChildren,
   ApiModelsRoute: ApiModelsRouteWithChildren,
+  ApiSettingsRoute: ApiSettingsRouteWithChildren,
   ApiUploadRoute: ApiUploadRoute,
+  ApiWorkspaceRoute: ApiWorkspaceRouteWithChildren,
+  ApiSystemStatsRoute: ApiSystemStatsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

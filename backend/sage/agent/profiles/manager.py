@@ -34,7 +34,7 @@ class ProfileManager:
                 "execute_command", "execute_code", "run_script",
                 "read_pdf", "read_docx", "read_xlsx", "read_image", "ocr_extract",
                 "generate_docx", "generate_xlsx", "generate_pptx", "generate_pdf",
-                "calculator",
+                "calculator", "synthesize_capability",
             }
         )
 

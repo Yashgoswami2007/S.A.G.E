@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from sage.config import settings
+from sage.core.exceptions import SAGEError
+import sage.workspace as _ws_module
 from sage.core.utils import generate_id
 from sage.sandbox.schemas import SandboxResult
 
@@ -70,10 +72,29 @@ class SandboxManager:
     """
 
     def __init__(self):
-        self._sandbox_dir = Path(settings.SANDBOX_RUNS_DIR).resolve()
-        self._sandbox_dir.mkdir(parents=True, exist_ok=True)
+        # _sandbox_dir is resolved lazily so that SandboxManager can be
+        # instantiated at module import time, before workspace_manager is
+        # initialised by main.py's lifespan handler.
+        self.__sandbox_dir: Optional[Path] = None
         # Track running processes for user-initiated cancellation
         self._running: Dict[str, asyncio.subprocess.Process] = {}
+
+    @property
+    def _sandbox_dir(self) -> Path:
+        """Lazily resolve and create the sandbox working directory."""
+        if self.__sandbox_dir is None:
+            if _ws_module.workspace_manager is None:
+                raise RuntimeError(
+                    "workspace_manager has not been initialised yet. "
+                    "Ensure init_workspace_manager() is called during app startup."
+                )
+            self.__sandbox_dir = _ws_module.workspace_manager.resolve_path("sandbox_runs")
+            self.__sandbox_dir.mkdir(parents=True, exist_ok=True)
+        return self.__sandbox_dir
+
+    @_sandbox_dir.setter
+    def _sandbox_dir(self, value: Path):
+        self.__sandbox_dir = value
 
     async def execute_code(
         self,
@@ -168,7 +189,7 @@ class SandboxManager:
             SandboxResult with command output.
         """
         sandbox_id = generate_id()
-        workspace = Path(settings.WORKSPACE_DIR).resolve()
+        workspace = Path(_ws_module.workspace_manager.get_active_workspace()).resolve()
 
         if not workspace.exists():
             workspace.mkdir(parents=True, exist_ok=True)
@@ -287,7 +308,7 @@ class SandboxManager:
             SandboxResult with execution output.
         """
         sandbox_id = generate_id()
-        workspace = Path(settings.WORKSPACE_DIR).resolve()
+        workspace = Path(_ws_module.workspace_manager.get_active_workspace()).resolve()
         full_path = (workspace / script_path).resolve()
 
         # Path containment check
@@ -386,12 +407,24 @@ class SandboxManager:
         start_time = time.time()
 
         try:
+            env = os.environ.copy()
+
+# Make the local SAGE backend package available to sandbox processes.
+            backend_dir = Path(__file__).resolve().parents[2]
+            existing_pythonpath = env.get("PYTHONPATH", "")
+
+            if existing_pythonpath:
+                env["PYTHONPATH"] = f"{backend_dir}{os.pathsep}{existing_pythonpath}"
+            else:
+                env["PYTHONPATH"] = str(backend_dir)
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
-            )
+                env=env,
+)
             self._running[sandbox_id] = process
 
             stdout_bytes, stderr_bytes = await process.communicate()
@@ -408,7 +441,7 @@ class SandboxManager:
                     if item.is_file() and item.name != f"script{item.suffix}":
                         try:
                             files_created.append(
-                                str(item.relative_to(Path(settings.WORKSPACE_DIR).resolve()))
+                                str(item.relative_to(Path(_ws_module.workspace_manager.get_active_workspace()).resolve()))
                             )
                         except ValueError:
                             files_created.append(str(item.relative_to(exec_dir)))

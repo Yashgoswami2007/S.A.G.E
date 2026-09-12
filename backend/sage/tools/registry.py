@@ -36,6 +36,36 @@ class ToolRegistry:
         """Retrieves a registered tool by name."""
         return self._tools.get(name)
 
+    def load_dynamic_tools(self, dynamic_tools_dir: str, sandbox_manager):
+        """Loads all dynamic tools from the given directory."""
+        import os
+        import json
+        from pathlib import Path
+        from sage.tools.dynamic_runtime import DynamicTool
+        from sage.tool_factory.models import ToolSpecification
+
+        base_dir = Path(dynamic_tools_dir) / "generated"
+        if not base_dir.exists():
+            return
+            
+        for tool_dir in base_dir.iterdir():
+            if not tool_dir.is_dir():
+                continue
+                
+            manifest_path = tool_dir / "manifest.json"
+            code_path = tool_dir / "tool.py"
+            
+            if manifest_path.exists() and code_path.exists():
+                try:
+                    data = json.loads(manifest_path.read_text())
+                    spec = ToolSpecification(**data)
+                    dynamic_tool = DynamicTool(spec, str(code_path), sandbox_manager)
+                    self.register(dynamic_tool)
+                    logger.info(f"Loaded dynamic tool: {spec.name} v{spec.version}")
+                except Exception as e:
+                    logger.error(f"Failed to load dynamic tool {tool_dir.name}: {e}")
+
+
     def list_tools(
         self,
         allowed_tools: Optional[Set[str]] = None,

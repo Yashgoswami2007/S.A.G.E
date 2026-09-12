@@ -36,8 +36,7 @@ class ModelLifecycleManager:
         self.registry = registry
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
         self._health_tasks: Dict[str, asyncio.Task] = {}
-        # Track which fallback activations are already in-flight to avoid duplicates
-        self._fallback_in_progress: set = set()
+
         # GPU status — populated on start_all()
         self.gpu_status: Optional[GPUStatus] = None
         
@@ -56,8 +55,6 @@ class ModelLifecycleManager:
             if not os.path.exists(model.model_path):
                 logger.error(f"Model file not found for {model.id} at {model.model_path}. Marking UNAVAILABLE.")
                 model.status = "UNAVAILABLE"
-                # Fire-and-forget: attempt to start fallback after a short settle delay
-                asyncio.create_task(self._activate_fallback(model.id))
                 continue
                 
             if model.auto_start:
@@ -66,9 +63,7 @@ class ModelLifecycleManager:
                 logger.info(f"Model {model.id} is configured for on-demand loading.")
                 model.status = "UNAVAILABLE"
 
-        # After spawning all auto-start servers, wait up to 60 s for each to become
-        # READY and trigger fallback for any that never make it.
-        asyncio.create_task(self._watch_startup_and_fallback())
+        # Auto-start complete
 
     def _scan_for_models(self):
         """Auto-discover .gguf files in the models directory and merge into registry."""
@@ -267,55 +262,11 @@ class ModelLifecycleManager:
             if proc and proc.returncode is not None:
                 logger.error(f"Model server for {model.id} crashed with exit code {proc.returncode}. Marking UNAVAILABLE.")
                 model.status = "UNAVAILABLE"
-                # Trigger fallback asynchronously so we don't block the health loop
-                asyncio.create_task(self._activate_fallback(model.id))
                 break
                 
             await asyncio.sleep(5)
             
-    async def _watch_startup_and_fallback(self):
-        """
-        After start_all(), waits up to 60 s for each auto-start model to reach READY.
-        If any auto-start model is still UNAVAILABLE after that window, its fallback
-        is activated automatically.
-        """
-        await asyncio.sleep(60)
-        for model in self.registry.list_all():
-            if model.auto_start and model.status == "UNAVAILABLE":
-                logger.warning(
-                    f"Auto-start model {model.id} never became READY within 60 s. "
-                    "Triggering fallback."
-                )
-                asyncio.create_task(self._activate_fallback(model.id))
 
-    async def _activate_fallback(self, failed_model_id: str):
-        """
-        Starts the configured fallback model for failed_model_id.
-        Safe to call multiple times — deduped via _fallback_in_progress.
-        """
-        if failed_model_id in self._fallback_in_progress:
-            return
-        fallback = self.registry.get_fallback(failed_model_id)
-        if not fallback:
-            logger.warning(f"No fallback configured for {failed_model_id}. Service degraded.")
-            return
-        if fallback.status == "READY":
-            logger.info(f"Fallback {fallback.id} is already READY.")
-            return
-
-        self._fallback_in_progress.add(failed_model_id)
-        try:
-            logger.warning(
-                f"Primary model {failed_model_id} is UNAVAILABLE. "
-                f"Activating fallback: {fallback.id}"
-            )
-            success = await self.start_model(fallback.id)
-            if success:
-                logger.info(f"Fallback {fallback.id} is now READY and serving requests.")
-            else:
-                logger.error(f"Fallback {fallback.id} also failed to start. No models available.")
-        finally:
-            self._fallback_in_progress.discard(failed_model_id)
 
     async def stop_all(self):
         """Terminates all running model servers."""

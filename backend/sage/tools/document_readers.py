@@ -11,21 +11,17 @@ from pathlib import Path
 from typing import Optional
 
 from sage.tools.base import BaseTool, ToolPermission, ToolResult
-from sage.config import settings
+import sage.workspace as _ws_module
 
 logger = logging.getLogger("sage.tools.document_readers")
 
 
 def _resolve_path(path_str: str) -> Path:
     """Resolves relative paths against workspace directory and enforces containment."""
-    base_dir = Path(settings.WORKSPACE_DIR).resolve()
-    target_path = (base_dir / path_str).resolve()
     try:
-        target_path.relative_to(base_dir)
-    except ValueError:
-        if not str(target_path).startswith(str(base_dir)):
-            return base_dir
-    return target_path
+        return _ws_module.workspace_manager.resolve_path(path_str)
+    except PermissionError:
+        return Path(_ws_module.workspace_manager.get_active_workspace()).resolve()
 
 
 class ReadPDFTool(BaseTool):

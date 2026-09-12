@@ -10,12 +10,21 @@ from sage.agent.profiles.manager import ProfileManager
 from sage.agent.router import ModelRouter
 from sage.models.client import OpenAICompatibleClient
 from sage.tools.registry import ToolRegistry
-from sage.tools.base import ToolPermission
+from sage.tools.base import ToolPermission, ToolResult
 from sage.agent.planner import Planner
 from sage.core.utils import generate_id
+from sage.tool_factory.factory import ToolFactory
+from sage.config import settings
+from sage.sandbox.sandbox_manager import SandboxManager
 
 StreamCallback = Callable[[TraceEvent], Awaitable[None]]
 logger = logging.getLogger("sage.executor")
+
+
+class ApprovalRejectedError(Exception):
+    """Raised when a user rejects a high-risk tool operation."""
+    pass
+
 
 class ReActExecutor:
     def __init__(
@@ -25,7 +34,7 @@ class ReActExecutor:
         profile_manager: ProfileManager,
         lifecycle_manager=None,
         max_steps: int = 15,
-        max_retries_per_step: int = 3
+        max_retries_per_step: int = 0
     ):
         self.router = router
         self.tool_registry = tool_registry
@@ -62,15 +71,14 @@ class ReActExecutor:
 
         # ── Process File Attachments ───────────────────────────────────────
         from sage.multimodal.file_processor import FileProcessor
-        from sage.config import settings
-        import os
+        import sage.workspace as _ws_module
         
         file_context_str = ""
         vision_images = []
         if file_attachments:
             processor = FileProcessor()
-            # Resolve relative paths against WORKSPACE_DIR
-            abs_paths = [os.path.join(settings.WORKSPACE_DIR, str(p).lstrip('/\\')) for p in file_attachments]
+            # Resolve relative paths against workspace
+            abs_paths = [str(_ws_module.workspace_manager.resolve_path(str(p).lstrip('/\\'))) for p in file_attachments]
             processed_files = processor.process_multiple(abs_paths)
             file_context_str = processor.build_context_string(processed_files)
             if model_config.supports_vision:
@@ -277,9 +285,25 @@ class ReActExecutor:
                         tool_args=tool_args,
                         reflection=f"High-risk operation '{tool_name}' requires approval before execution."
                     )
-                    await emit(approval_event)
-                    # For Phase 1 backend test harness: auto-approve after state transition record
-                    
+                    try:
+                        await emit(approval_event)
+                    except ApprovalRejectedError:
+                        # User rejected — emit rejection event and skip this tool step
+                        reject_event = TraceEvent(
+                            task_id=task_id,
+                            step_id=step.step_id,
+                            agent_state=AgentState.REFLECTING,
+                            profile=profile.name,
+                            selected_model=model_config.id,
+                            tool_name=tool_name,
+                            error=f"User rejected high-risk operation '{tool_name}'.",
+                            reflection=f"Tool '{tool_name}' was rejected by the user. Skipping this step."
+                        )
+                        await emit(reject_event)
+                        current_step_idx += 1
+                        step_retry_count = 0
+                        continue
+
             act_event = TraceEvent(
                 task_id=task_id,
                 step_id=step.step_id,
@@ -294,11 +318,57 @@ class ReActExecutor:
             # 4. State = OBSERVING
             start_time = time.time()
             if tool_name:
-                tool_res = await self.tool_registry.execute_tool(
-                    name=tool_name,
-                    kwargs=tool_args,
-                    allowed_tools=profile.allowed_tools
-                )
+                if tool_name == "synthesize_capability":
+                    # Dynamic tool synthesis flow
+                    capability = tool_args.get("capability", "unknown_capability")
+                    reason = tool_args.get("reason", "")
+                    requirements = tool_args.get("requirements", "")
+
+                    await emit(TraceEvent(
+                        task_id=task_id, step_id=step.step_id,
+                        agent_state=AgentState.ACTING,
+                        profile=profile.name, selected_model=model_config.id,
+                        reflection=f"Synthesizing capability '{capability}': {reason}"
+                    ))
+
+                    # Reuse a SandboxManager that is properly initialized
+                    # rather than constructing a new one each time.
+                    # SandboxManager lazily resolves _sandbox_dir on first use,
+                    # so it's safe to instantiate here — workspace_manager is
+                    # guaranteed to be initialized by the time the executor runs.
+                    if not hasattr(self, '_sandbox_manager'):
+                        self._sandbox_manager = SandboxManager()
+                    factory = ToolFactory(client, llm_model_id, self._sandbox_manager, self.tool_registry)
+                    success, msg = await factory.synthesize_tool(
+                        capability, prompt, requirements, task_id,
+                        profile_name=profile.name, emit_cb=stream_callback,
+                    )
+
+                    # After successful synthesis, verify the tool is registered
+                    if success:
+                        synthesized_tool = self.tool_registry.get_tool(capability)
+                        if synthesized_tool is None:
+                            logger.warning(
+                                "Synthesis reported success for '%s' but tool "
+                                "not found in registry — downstream steps may fail.",
+                                capability,
+                            )
+                        else:
+                            # Add newly synthesized tool to this profile's allowed
+                            # tools so subsequent steps can use it
+                            profile.allowed_tools.add(capability)
+                            logger.info(
+                                "Verified: synthesized tool '%s' is registered and "
+                                "added to profile allowed_tools.", capability,
+                            )
+
+                    tool_res = ToolResult(success=success, output=msg, error=msg if not success else None)
+                else:
+                    tool_res = await self.tool_registry.execute_tool(
+                        name=tool_name,
+                        kwargs=tool_args,
+                        allowed_tools=profile.allowed_tools
+                    )
                 duration_ms = (time.time() - start_time) * 1000.0
 
                 obs_event = TraceEvent(
@@ -544,7 +614,13 @@ class ReActExecutor:
                     if not final_output:
                         # Model only produced <think> with no answer, or unclosed tag
                         final_output = re.sub(r"<think>.*", "", raw_output, flags=re.DOTALL).strip()
-                        final_output = final_output or "No output generated."
+                        
+                    if "[TRUNCATED_DUE_TO_LENGTH_LIMIT]" in raw_output:
+                        final_output += "\n\n[Response was truncated due to length limits. Try reducing the input context or ask for a shorter response.]"
+                        final_output = final_output.replace("[TRUNCATED_DUE_TO_LENGTH_LIMIT]", "").strip()
+                        
+                    if not final_output.strip():
+                        final_output = "No output generated."
 
                 else:
                     try:
@@ -579,7 +655,13 @@ class ReActExecutor:
                     # Strip Qwen3-style <think>...</think> reasoning blocks; keep only the answer
                     final_output = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
                     if not final_output:
-                        # Model returned only a <think> block — don't show raw XML
+                        # Model returned only a <think> block or was truncated inside it
+                        final_output = re.sub(r"<think>.*", "", raw, flags=re.DOTALL).strip()
+                        
+                    if llm_resp.get("_truncated"):
+                        final_output += "\n\n[Response was truncated due to length limits. Try reducing the input context or ask for a shorter response.]"
+                        
+                    if not final_output.strip():
                         final_output = "No output generated."
                 
                 duration_ms = (time.time() - start_time) * 1000.0

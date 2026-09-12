@@ -136,3 +136,37 @@ class ConfigError(SAGEError):
             details=details,
         )
 
+class WorkspaceError(SAGEError):
+    def __init__(self, message: str, code: str = "WORKSPACE_ERROR", status_code: int = status.HTTP_400_BAD_REQUEST, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            code=code,
+            status_code=status_code,
+            details=details,
+        )
+
+class WorkspaceInvalidError(WorkspaceError):
+    def __init__(self, message: str = "Invalid workspace path", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            code="WORKSPACE_INVALID",
+            details=details,
+        )
+
+class WorkspaceNotFoundError(WorkspaceError):
+    def __init__(self, message: str = "Workspace directory not found", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            code="WORKSPACE_NOT_FOUND",
+            details=details,
+        )
+
+class WorkspaceForbiddenError(WorkspaceError):
+    def __init__(self, message: str = "Path is a protected system directory", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            code="WORKSPACE_FORBIDDEN",
+            status_code=status.HTTP_403_FORBIDDEN,
+            details=details,
+        )
+

@@ -1,6 +1,8 @@
+from aiohttp import client_middleware_digest_auth
 import json
 import logging
-from typing import List, Optional, Dict
+import re
+from typing import List, Optional, Dict, Set, Tuple
 from sage.agent.schemas import Plan, Step
 from sage.models.client import OpenAICompatibleClient
 from sage.agent.profiles.base import AgentProfile
@@ -50,7 +52,140 @@ class Planner:
             lines.append(f"Description: {tool.description}")
             lines.append(f"Parameters:\n{params_str}")
             lines.append("DO NOT use any other arguments.\n")
+            
+        # Add synthesize_capability meta-tool
+        lines.append("synthesize_capability")
+        lines.append("Description: A meta-tool that generates a new capability/tool dynamically. Use when the user asks to create/synthesize a new tool or when no existing tool can fulfill a step.")
+        lines.append("Parameters:")
+        lines.append("  - capability: string [REQUIRED]: The capability you need (e.g. 'spreadsheet_generation')")
+        lines.append("  - reason: string [REQUIRED]: Why existing tools are insufficient.")
+        lines.append("  - requirements: string [REQUIRED]: Detailed requirements for the new tool (e.g., formats, operations).")
+        lines.append("DO NOT use any other arguments.\n")
+        
         return "\n".join(lines)
+
+    # ── Synthesis Intent Detection ───────────────────────────────────────
+
+    @staticmethod
+    def _detect_synthesis_intent(prompt: str) -> bool:
+        """Heuristically detects if the user is asking to create a tool dynamically."""
+        keywords = [
+            "make a tool", "create a tool", "build a tool", "generate a tool",
+            "synthesize", "tool factory", "new tool", "custom tool",
+            "write a tool", "develop a tool",
+        ]
+        prompt_lower = prompt.lower()
+        return any(kw in prompt_lower for kw in keywords)
+
+    # ── Tool Classification ──────────────────────────────────────────────
+
+    @staticmethod
+    def _classify_tool(
+        tool_name: str,
+        tool_registry,
+        synthesized_tools: Set[str],
+    ) -> str:
+        """Classify a tool reference as EXISTING, FUTURE, or UNKNOWN.
+
+        Returns:
+            'existing'  — tool is registered and ready to use
+            'future'    — tool will be created by a preceding synthesize_capability step
+            'unknown'   — tool does not exist and is not scheduled for synthesis
+        """
+        if tool_name == "synthesize_capability":
+            return "existing"  # meta-tool, always available
+        if tool_registry.get_tool(tool_name):
+            return "existing"
+        if tool_name in synthesized_tools:
+            return "future"
+        return "unknown"
+
+    # ── Plan Normalization ───────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_synthesis_plan(
+        raw_steps: List[dict],
+        prompt: str,
+        tool_registry,
+        synthesis_intent: bool,
+    ) -> Tuple[List[dict], Set[str]]:
+        """Normalize a plan to ensure synthesize → execute ordering.
+
+        This fixes LLM plans that reference not-yet-created tools without
+        a preceding synthesize_capability step.  It:
+          1. Collects all tools that synthesize_capability steps will create.
+          2. Identifies tool references that are neither existing nor scheduled
+             for synthesis.
+          3. If synthesis intent is detected OR unknown tools are referenced,
+             injects the missing synthesize_capability steps.
+          4. Reorders so synthesis always precedes execution.
+
+        Returns:
+            (normalized_steps, synthesized_tools_set)
+        """
+        # Pass 1: Identify tools that will be synthesized by explicit steps
+        synthesized_tools: Set[str] = set()
+        for s in raw_steps:
+            if s.get("tool_name") == "synthesize_capability":
+                args = s.get("tool_args")
+                if isinstance(args, dict):
+                    cap = args.get("capability")
+                    if cap:
+                        synthesized_tools.add(cap)
+
+        # Pass 2: Find tool references that are unknown AND not scheduled for synthesis
+        unknown_tools: Set[str] = set()
+        for s in raw_steps:
+            tn = s.get("tool_name")
+            if tn and tn != "synthesize_capability":
+                classification = Planner._classify_tool(tn, tool_registry, synthesized_tools)
+                if classification == "unknown":
+                    unknown_tools.add(tn)
+
+        # Pass 3: Inject synthesis steps for unknown tools if synthesis intent detected
+        #   OR if the LLM referenced tools that don't exist (likely meant to create them)
+        injected_steps = []
+        if unknown_tools and (synthesis_intent or len(unknown_tools) > 0):
+            for ut in sorted(unknown_tools):
+                logger.info(
+                    "Injecting synthesize_capability for unknown tool '%s' "
+                    "(synthesis_intent=%s)", ut, synthesis_intent,
+                )
+                injected_steps.append({
+                    "step_id": 0,  # will be renumbered
+                    "description": f"Synthesize the '{ut}' tool dynamically",
+                    "tool_name": "synthesize_capability",
+                    "tool_args": {
+                        "capability": ut,
+                        "reason": f"Tool '{ut}' does not exist yet — creating it to fulfill the user request.",
+                        "requirements": prompt,
+                    },
+                })
+                synthesized_tools.add(ut)
+
+        # Pass 4: If synthesis intent is strong but NO synthesize_capability in plan at all,
+        #   inject a generic one
+        if synthesis_intent and not synthesized_tools and not injected_steps:
+            logger.info("Synthesis intent detected but no synthesis steps — injecting generic.")
+            injected_steps.append({
+                "step_id": 0,
+                "description": "Synthesize the requested tool",
+                "tool_name": "synthesize_capability",
+                "tool_args": {
+                    "capability": "user_requested_tool",
+                    "reason": "User explicitly asked to create a tool.",
+                    "requirements": prompt,
+                },
+            })
+
+        # Combine: synthesis steps first, then original steps
+        normalized = injected_steps + raw_steps
+
+        # Renumber step_ids
+        for i, s in enumerate(normalized):
+            s["step_id"] = i + 1
+
+        return normalized, synthesized_tools
 
     # ── Plan Generation ──────────────────────────────────────────────────
 
@@ -75,6 +210,11 @@ class Planner:
         """
         if tool_registry is None:
             raise ValueError("tool_registry is required for Planner.create_plan()")
+
+        # ── Step 0: Detect synthesis intent BEFORE anything else ─────────
+        synthesis_intent = self._detect_synthesis_intent(prompt)
+        if synthesis_intent:
+            logger.info("Synthesis intent detected in prompt: %r", prompt[:120])
 
         tool_section = self._format_tool_schemas(profile, tool_registry)
         
@@ -114,6 +254,8 @@ class Planner:
             "- tool_args must be a JSON object containing only valid parameters for that tool.\n"
             "- If the tool has no arguments, use an empty object {}.\n"
             "- If no tool is needed, set tool_name and tool_args to null.\n"
+            "- If the user asks to CREATE or SYNTHESIZE a new tool, use 'synthesize_capability' as tool_name.\n"
+            "- After synthesizing a tool, add a separate step to EXECUTE it.\n"
         )
         
         try:
@@ -126,11 +268,14 @@ class Planner:
                 model=model_id,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048,  # increased: Qwen3 <think> blocks need headroom
+                max_tokens=6144,  # increased: Qwen3 <think> blocks need headroom
                 circuit_breaker_key=circuit_breaker_key,
             )
             
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            
+            # Strip <think> tags (Qwen3)
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             
             # Simple heuristic to extract JSON if surrounded by markdown code blocks
             if "```json" in content:
@@ -139,23 +284,59 @@ class Planner:
                 content = content.split("```")[1].split("```")[0].strip()
                 
             data = json.loads(content)
-            
+            raw_steps = data.get("steps", [])
+
+            # ── Step 1: Normalize plan for synthesis ordering ────────────
+            normalized_steps, synthesized_tools = self._normalize_synthesis_plan(
+                raw_steps, prompt, tool_registry, synthesis_intent
+            )
+
+            # ── Step 2: Validate and build Step objects ──────────────────
             steps = []
-            for s in data.get("steps", []):
+            for s in normalized_steps:
                 tool_name = s.get("tool_name")
                 tool_args = s.get("tool_args")
 
-                # Validate tool call against registry schemas before plan acceptance
-                if tool_name:
-                    tool_registry.validate_tool_call(tool_name, tool_args)
+                if tool_name and tool_name != "synthesize_capability":
+                    classification = self._classify_tool(
+                        tool_name, tool_registry, synthesized_tools
+                    )
 
-                steps.append(Step(
-                    step_id=s.get("step_id", len(steps) + 1),
-                    description=s.get("description", "Step"),
-                    tool_name=tool_name,
-                    tool_args=tool_args
-                ))
-                
+                    if classification == "existing":
+                        # Validate arguments against registered schema
+                        try:
+                            tool_registry.validate_tool_call(tool_name, tool_args)
+                        except ValueError as ve:
+                            logger.warning(
+                                "Validation failed for existing tool '%s': %s — "
+                                "keeping step, executor will handle retry.",
+                                tool_name, ve,
+                            )
+                    elif classification == "future":
+                        # Tool will be created by a preceding synthesize_capability step.
+                        # We can't validate args yet — skip validation gracefully.
+                        logger.info(
+                            "Skipping validation for future tool '%s' — "
+                            "will be synthesized during execution.", tool_name,
+                        )
+                    else:
+                        # Genuinely unknown: no synthesis planned, not in registry
+                        logger.warning(
+                            "Dropping step with genuinely unknown tool '%s' — "
+                            "not in registry and not scheduled for synthesis.",
+                            tool_name,
+                        )
+                        continue  # skip this step entirely
+
+                steps.append(
+                    Step(
+                        step_id=s.get("step_id", len(steps) + 1),
+                        description=s.get("description", "Step"),
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                    )
+                )
+
             return Plan(summary=data.get("summary", "Generated Plan"), steps=steps)
             
         except Exception as e:
@@ -165,6 +346,30 @@ class Planner:
                 content if "content" in locals() else None,
                 exc_info=True,
             )
+            # ── Fallback: if synthesis intent was detected, produce a
+            #    minimal plan with synthesize_capability instead of a
+            #    bare LLM-only step that can't do anything useful.
+            if synthesis_intent:
+                logger.info(
+                    "Planner exception with synthesis intent — "
+                    "generating fallback synthesis plan."
+                )
+                return Plan(
+                    summary=f"Synthesize tool (fallback): {prompt[:80]}",
+                    steps=[
+                        Step(
+                            step_id=1,
+                            description="Synthesize the requested tool",
+                            tool_name="synthesize_capability",
+                            tool_args={
+                                "capability": "user_requested_tool",
+                                "reason": "Planner failed to generate a valid plan; falling back to direct synthesis.",
+                                "requirements": prompt,
+                            },
+                        )
+                    ],
+                )
+
             return Plan(
                 summary=f"Process request (fallback): {prompt}",
                 steps=[
@@ -176,4 +381,3 @@ class Planner:
                     )
                 ]
             )
-

@@ -1,14 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseAgentEvent, type AgentEvent } from "@/lib/agent-events";
-import { PanelLeft, Plus } from "lucide-react";
+import { PanelLeft, Plus, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Sidebar } from "@/components/sage/Sidebar";
+import { WorkspaceSidebar } from "@/components/sage/WorkspaceSidebar";
 import { Composer } from "@/components/sage/Composer";
 import { MessageItem } from "@/components/sage/Messages";
 import { ConnectorsDialog } from "@/components/sage/ConnectorsDialog";
+import { SettingsPanel } from "@/components/sage/SettingsPanel";
 import { SageMark } from "@/components/sage/SageLogo";
 import {
   flushChats,
@@ -64,7 +66,9 @@ function SagePage() {
   const models = useModels();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [workspaceSidebarOpen, setWorkspaceSidebarOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState<string>("");
   const [style, setStyle] = useState("normal");
   const [profile, setProfile] = useState("auto");
@@ -229,11 +233,7 @@ function SagePage() {
                     }
                     newEvents.push(evt);
                   } else if (evt.type === "CONFIRMATION_REQUIRED") {
-                    fetch("/api/chat/confirm", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ request_id: evt.request_id, approved: true })
-                    }).catch(console.error);
+                    // Render the event — user will approve/reject via the UI
                     newEvents.push(evt);
                   } else {
                     newEvents.push(evt);
@@ -463,19 +463,25 @@ function SagePage() {
         onNew={newChat}
         onDelete={deleteChat}
         onOpenConnectors={() => setConnectorsOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
         open={sidebarOpen}
         onToggle={() => setSidebarOpen((v) => !v)}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center gap-2 px-3 py-2.5">
-          {!sidebarOpen && (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSidebarOpen(true)}>
-              <PanelLeft className="h-4 w-4" />
+        <header className="flex items-center justify-between gap-2 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            {!sidebarOpen && (
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSidebarOpen(true)}>
+                <PanelLeft className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+          {!workspaceSidebarOpen && (
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={() => setWorkspaceSidebarOpen(true)}>
+              <FolderOpen className="h-4 w-4" />
             </Button>
           )}
-
-
         </header>
 
         {messages.length === 0 ? (
@@ -556,11 +562,20 @@ function SagePage() {
         )}
       </main>
 
+      <WorkspaceSidebar
+        open={workspaceSidebarOpen}
+        onToggle={() => setWorkspaceSidebarOpen((v) => !v)}
+      />
+
       <ConnectorsDialog
         open={connectorsOpen}
         onOpenChange={setConnectorsOpen}
         connectors={connectors}
         onToggle={toggle}
+      />
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
       />
       <Toaster />
     </div>

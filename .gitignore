@@ -47,3 +47,4 @@ build/
 
 # Workspace
 workspace/
+config/workspace_state.json

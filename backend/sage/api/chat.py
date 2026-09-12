@@ -9,7 +9,7 @@ from sage.models.registry import ModelRegistry
 from sage.agent.router import ModelRouter
 from sage.tools import create_default_tool_registry
 from sage.agent.profiles import ProfileManager
-from sage.agent.executor import ReActExecutor
+from sage.agent.executor import ReActExecutor, ApprovalRejectedError
 from sage.api.tasks import store_task_result
 from sage.agent.state import TraceEvent, AgentState
 from sage.api.events import trace_to_event, sse_encode, FinalEvent, ErrorEvent
@@ -27,8 +27,9 @@ profile_manager = ProfileManager()
 # Lazily-built executor cache — needs app.state.lifecycle_manager at runtime
 _executor: Optional[ReActExecutor] = None
 
-# Global dictionary for pending confirmations (in-memory, single-server)
-_pending_confirmations: Dict[str, asyncio.Event] = {}
+# Global dictionary for pending confirmations (in-memory, single-server).
+# Each entry stores: {"event": asyncio.Event, "approved": bool | None}
+_pending_confirmations: Dict[str, dict] = {}
 
 def _get_executor(request: Request) -> ReActExecutor:
     """
@@ -115,15 +116,27 @@ async def chat_stream(req: StreamRequest, request: Request):
                 if agent_event:
                     await queue.put(sse_encode(agent_event))
                 
-                # Handle approval wait
+                # Handle approval wait — blocks until user approves or rejects
                 if trace_event.agent_state == AgentState.WAITING_FOR_APPROVAL:
                     req_id = trace_event.id
-                    approval_event = asyncio.Event()
-                    _pending_confirmations[req_id] = approval_event
+                    confirmation_record = {
+                        "event": asyncio.Event(),
+                        "approved": None,  # Will be set by confirm_action
+                    }
+                    _pending_confirmations[req_id] = confirmation_record
                     try:
-                        await approval_event.wait()
+                        await confirmation_record["event"].wait()
                     finally:
                         _pending_confirmations.pop(req_id, None)
+
+                    # After unblocking, check whether the user approved or rejected
+                    if not confirmation_record["approved"]:
+                        raise ApprovalRejectedError(
+                            f"User rejected high-risk operation '{trace_event.tool_name}'"
+                        )
+            except ApprovalRejectedError:
+                # Re-raise so it propagates through emit() to the executor
+                raise
             except Exception as cb_err:
                 chat_logger.error("Error in stream_callback: %s", cb_err, exc_info=True)
 
@@ -178,12 +191,14 @@ class ConfirmRequest(BaseModel):
 
 @router.post("/confirm")
 async def confirm_action(req: ConfirmRequest):
-    """Unblocks a pending high-risk tool operation."""
-    event = _pending_confirmations.get(req.request_id)
-    if not event:
+    """Unblocks a pending high-risk tool operation after user approval or rejection."""
+    record = _pending_confirmations.get(req.request_id)
+    if not record:
         raise HTTPException(status_code=404, detail=f"Confirmation request '{req.request_id}' not found or already processed")
     
-    event.set()
+    # Store the approval decision BEFORE unblocking so the stream_callback can read it
+    record["approved"] = req.approved
+    record["event"].set()
     return {"status": "ok", "request_id": req.request_id, "approved": req.approved}
 
 class ResponseConfirmationRequest(BaseModel):

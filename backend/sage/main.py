@@ -20,7 +20,8 @@ from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings
 from sage.auth.middleware import AuthMiddleware
 from sage.core.exceptions import SAGEError
-from sage.api import health, auth, admin, chat, tasks, upload
+from sage.api import health, auth, admin, chat, tasks, upload, workspace, system_stats
+from sage.api import settings as settings_router
 from sage.models.lifecycle import ModelLifecycleManager
 
 from sage.models.registry import ModelRegistry
@@ -46,6 +47,22 @@ except Exception as exc:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting SAGE backend (Phase 2a Model Serving active)...")
+    
+    # Initialize workspace manager
+    try:
+        from sage.workspace import init_workspace_manager
+        init_workspace_manager()
+        from sage.workspace import workspace_manager
+        info = workspace_manager.get_workspace_info()
+        logger.info(
+            "SAGE Workspace:\n"
+            f"  Default: {info.default_workspace}\n"
+            f"  Active:  {info.active_workspace}\n"
+            f"  Mode:    {info.mode}"
+        )
+    except Exception as exc:
+        logger.error(f"Failed to initialize workspace manager: {exc}")
+
     try:
         await lifecycle_manager.start_all()
     except Exception as exc:
@@ -85,6 +102,9 @@ app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(upload.router, prefix="/api", tags=["upload"])
+app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(system_stats.router, prefix="/api/system/stats", tags=["system"])
+app.include_router(settings_router.router, prefix="/api/settings", tags=["settings"])
 
 # Global Exception Handlers
 @app.exception_handler(SAGEError)

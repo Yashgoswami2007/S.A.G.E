@@ -62,6 +62,7 @@ class ConfirmationRequiredEvent(BaseModel):
     action: str
     description: str
     request_id: str
+    tool_args: Dict[str, Any] = {}
 
 class FinalEvent(BaseModel):
     type: Literal["FINAL"] = "FINAL"
@@ -70,6 +71,15 @@ class FinalEvent(BaseModel):
 class TokenEvent(BaseModel):
     type: Literal["TOKEN"] = "TOKEN"
     token: str
+
+class ToolSynthesisProgressEvent(BaseModel):
+    type: Literal["TOOL_SYNTHESIS_PROGRESS"] = "TOOL_SYNTHESIS_PROGRESS"
+    stage: str
+    message: str
+    attempt: Optional[int] = None
+    max_attempts: Optional[int] = None
+    tool_name: Optional[str] = None
+    tool_factory_id: Optional[str] = None
 
 AgentEvent = Union[
     PlanCreatedEvent,
@@ -84,6 +94,7 @@ AgentEvent = Union[
     ConfirmationRequiredEvent,
     FinalEvent,
     TokenEvent,
+    ToolSynthesisProgressEvent,
 ]
 
 def trace_to_event(trace: TraceEvent, plan: Optional[Any] = None) -> Optional[AgentEvent]:
@@ -113,6 +124,17 @@ def trace_to_event(trace: TraceEvent, plan: Optional[Any] = None) -> Optional[Ag
                 tool_name=trace.tool_name,
                 tool_args=trace.tool_args or {}
             )
+            
+    if trace.agent_state == AgentState.TOOL_SYNTHESIS:
+        if trace.synthesis_info:
+            return ToolSynthesisProgressEvent(
+                stage=trace.synthesis_info.get("stage", "UNKNOWN"),
+                message=trace.synthesis_info.get("message", ""),
+                attempt=trace.synthesis_info.get("attempt"),
+                max_attempts=trace.synthesis_info.get("max_attempts"),
+                tool_name=trace.synthesis_info.get("tool_name"),
+                tool_factory_id=trace.synthesis_info.get("tool_factory_id")
+            )
     
     if trace.agent_state == AgentState.OBSERVING:
         if trace.tool_name:
@@ -135,7 +157,8 @@ def trace_to_event(trace: TraceEvent, plan: Optional[Any] = None) -> Optional[Ag
         return ConfirmationRequiredEvent(
             action=trace.tool_name or "Unknown Action",
             description=trace.reflection or "High risk operation requires approval.",
-            request_id=trace.id
+            request_id=trace.id,
+            tool_args=trace.tool_args or {}
         )
         
     if trace.agent_state == AgentState.FAILED:

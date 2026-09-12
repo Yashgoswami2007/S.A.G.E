@@ -23,6 +23,7 @@ from sage.tools.document_generators import (
     GeneratePdfTool,
 )
 from sage.tools.calculator import CalculatorTool
+from sage.tools.code_review import PythonCodeReviewTool
 
 def create_default_tool_registry() -> ToolRegistry:
     """Creates a ToolRegistry with all 18 core tools registered."""
@@ -54,7 +55,8 @@ def create_default_tool_registry() -> ToolRegistry:
     registry.register(GeneratePptxTool())
     registry.register(GeneratePdfTool())
 
-    # Utilities (1 tool)
+    # Utilities (2 tools)
     registry.register(CalculatorTool())
+    registry.register(PythonCodeReviewTool())
 
     return registry

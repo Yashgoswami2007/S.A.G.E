@@ -59,7 +59,8 @@ class TestPlanner(unittest.TestCase):
 
     def test_planner_validates_and_rejects_unexpected_path_arg(self):
         """When LLM returns a plan with unexpected 'path' arg for search_files,
-        planner catches it and safely falls back to a safe general plan.
+        planner logs a warning but keeps the step — the executor will handle
+        retry/correction via its argument correction loop.
         """
         mock_client = AsyncMock()
         # Mock LLM returning hallucinated 'path' argument
@@ -81,10 +82,11 @@ class TestPlanner(unittest.TestCase):
             )
         )
 
-        # Because 'path' was unexpected, plan validation failed and fallback plan was returned
-        self.assertIn("fallback", plan.summary.lower())
+        # The step should be kept (with a logged warning) — not rejected
+        # The executor's retry loop handles argument correction
+        self.assertEqual(plan.summary, "Search PDFs")
         self.assertEqual(len(plan.steps), 1)
-        self.assertIsNone(plan.steps[0].tool_name)
+        self.assertEqual(plan.steps[0].tool_name, "search_files")
 
     def test_planner_accepts_valid_tool_args(self):
         """When LLM returns valid tool arguments, the plan is accepted."""

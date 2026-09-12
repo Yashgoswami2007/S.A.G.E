@@ -5,8 +5,14 @@ SAGE System Operations — execute_command tool routed through SandboxManager.
 from sage.tools.base import BaseTool, ToolPermission, ToolResult
 from sage.sandbox import SandboxManager
 
-# Shared sandbox manager instance
-_sandbox = SandboxManager()
+# Shared sandbox manager instance will be loaded lazily
+_sandbox = None
+
+def get_sandbox():
+    global _sandbox
+    if _sandbox is None:
+        _sandbox = SandboxManager()
+    return _sandbox
 
 
 class ExecuteCommandTool(BaseTool):
@@ -33,7 +39,7 @@ class ExecuteCommandTool(BaseTool):
 
     async def execute(self, command: str) -> ToolResult:
         """Executes a command through the SandboxManager for audit and isolation."""
-        result = await _sandbox.execute_command(command=command)
+        result = await get_sandbox().execute_command(command=command)
 
         output_parts = []
         if result.stdout:
