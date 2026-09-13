@@ -26,6 +26,7 @@ class ModelConfig(BaseModel):
     context_length: int
     status: str = "UNAVAILABLE"  # READY, DEGRADED, UNAVAILABLE
     fallback_model_id: Optional[str] = None  # id of model to try if this one fails
+    pre_started: bool = False  # True = server already running externally; skip spawn, just health-check
     extra_args: List[str] = Field(default_factory=list)  # e.g. ["--jinja"] for gemma-4
 
     @computed_field

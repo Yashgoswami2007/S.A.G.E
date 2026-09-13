@@ -59,6 +59,16 @@ class ModelLifecycleManager:
                 
             if model.auto_start:
                 await self._start_server(model)
+            elif model.pre_started:
+                # Server is externally managed (e.g. user launched llama-server manually).
+                # Skip spawning; just start the health-check loop which will mark it READY.
+                logger.info(
+                    f"Model {model.id} is pre-started (external server on port {model.server_port}). "
+                    "Starting health-check loop — will mark READY when it responds."
+                )
+                model.status = "DEGRADED"  # Will flip to READY once health check passes
+                task = asyncio.create_task(self._health_check_loop(model))
+                self._health_tasks[model.id] = task
             else:
                 logger.info(f"Model {model.id} is configured for on-demand loading.")
                 model.status = "UNAVAILABLE"
@@ -129,6 +139,7 @@ class ModelLifecycleManager:
         if effective_mode == "gpu":
             if not gpu_status.cuda_available:
                 logger.error(
+                    f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected -- cannot start"
                     f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected - cannot start"
                 )
                 raise RuntimeError(f"gpu_mode=gpu requires CUDA but no GPU found for {model.id}")
@@ -140,7 +151,7 @@ class ModelLifecycleManager:
             logger.info(f"Model {model.id}: gpu_mode=auto, no CUDA -> ngl=0 (CPU fallback)")
             return 0
 
-        # CUDA is available — check VRAM fit
+        # CUDA is available -- check VRAM fit
         # Use the GPU with the most free VRAM
         best_gpu = max(gpu_status.gpus, key=lambda g: g.vram_free_mb)
         required_mb = model.min_vram_gb * 1024
@@ -157,6 +168,7 @@ class ModelLifecycleManager:
                 f"Model {model.id}: gpu_mode=auto, "
                 f"needs {model.min_vram_gb} GB ({required_mb} MB) but only "
                 f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
+                f"-> ngl=0 (CPU fallback -- insufficient VRAM)"
                 f"-> ngl=0 (CPU fallback - insufficient VRAM)"
             )
             return 0
@@ -202,7 +214,7 @@ class ModelLifecycleManager:
                 model.status = "UNAVAILABLE"
                 return
             cmd = [
-                "python", "-m", "vllm.entrypoints.openai.api_server",
+                "python", "-m", "vllm.entryspoints.openai.api_server",
                 "--model", model.model_path,
                 "--port", str(model.server_port),
                 "--gpu-memory-utilization", "0.9"

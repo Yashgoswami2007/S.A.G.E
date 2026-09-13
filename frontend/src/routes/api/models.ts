@@ -5,6 +5,7 @@ export const Route = createFileRoute("/api/models")({
     handlers: {
       GET: async () => {
         try {
+          const upstream = await fetch("http://127.0.0.1:8080/v1/models");
           // Fetch from SAGE backend's live model registry (includes auto-discovered models)
           const upstream = await fetch("http://127.0.0.1:8000/api/admin/models/available");
           if (!upstream.ok) {

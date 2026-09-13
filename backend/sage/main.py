@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings
+from sage.api import health, auth, admin, chat, tasks, rag
 from sage.auth.middleware import AuthMiddleware
 from sage.core.exceptions import SAGEError
 from sage.api import health, auth, admin, chat, tasks, upload, workspace, system_stats
@@ -101,6 +102,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
 app.include_router(system_stats.router, prefix="/api/system/stats", tags=["system"])

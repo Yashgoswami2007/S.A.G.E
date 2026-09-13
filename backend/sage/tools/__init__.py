@@ -8,6 +8,10 @@ from sage.tools.file_ops import (
     ApplyPatchTool,
 )
 from sage.tools.system_ops import ExecuteCommandTool
+from sage.tools.rag_ops import RagSearchTool, RagIngestTool
+
+def create_default_tool_registry() -> ToolRegistry:
+    """Creates a ToolRegistry with core tools and sovereign RAG tools registered."""
 from sage.tools.code_executor import ExecuteCodeTool, RunScriptTool
 from sage.tools.document_readers import (
     ReadPDFTool,
@@ -39,6 +43,8 @@ def create_default_tool_registry() -> ToolRegistry:
 
     # System & Code Execution (3 tools)
     registry.register(ExecuteCommandTool())
+    registry.register(RagSearchTool())
+    registry.register(RagIngestTool())
     registry.register(ExecuteCodeTool())
     registry.register(RunScriptTool())
 
@@ -60,3 +66,4 @@ def create_default_tool_registry() -> ToolRegistry:
     registry.register(PythonCodeReviewTool())
 
     return registry
+
