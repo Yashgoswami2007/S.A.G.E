@@ -5,7 +5,7 @@ export const Route = createFileRoute("/api/models")({
     handlers: {
       GET: async () => {
         try {
-          const upstream = await fetch("http://127.0.0.1:8001/v1/models");
+          const upstream = await fetch("http://127.0.0.1:8080/v1/models");
           if (!upstream.ok) {
             return new Response("Upstream error", { status: upstream.status || 500 });
           }

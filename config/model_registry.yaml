@@ -1,28 +1,14 @@
 models:
-  - id: qwen3-8b
-    name: "Qwen3-8B-Q4_K_M"
-    model_path: "./models/Qwen3-8B-Q4_K_M.gguf"
-    server_port: 8001
+  - id: qwen3-1.7b
+    name: "Qwen3-1.7B-Q8_0"
+    model_path: "./Qwen3-1.7B-Q8_0.gguf"
+    server_port: 8080
     server_type: "llama-server"
-    auto_start: true
+    auto_start: false        # Server is already running externally — do NOT spawn a new process
+    pre_started: true        # Health-check the existing server and mark READY when it responds
     gpu_layers: 99
-    gpu_mode: auto             # auto | gpu | cpu
-    capabilities: ["reasoning", "general"]
+    gpu_mode: auto
+    capabilities: ["reasoning", "general", "coding"]
     priority: 1
-    min_vram_gb: 5
-    context_length: 8192
-    fallback_model_id: "gemma-4-12b"   # loaded automatically if qwen3-8b fails
-
-  - id: gemma-4-12b
-    name: "Gemma 4 12B IT"
-    model_path: "./models/gemma-4-12b-it-Q4_K_M.gguf"
-    server_port: 8002
-    server_type: "llama-server"
-    auto_start: false
-    gpu_layers: 99
-    gpu_mode: auto             # auto | gpu | cpu
-    capabilities: ["coding", "vision", "reasoning", "general"]  # covers all tasks when acting as fallback
-    priority: 2
-    min_vram_gb: 8
-    context_length: 8192
-
+    min_vram_gb: 2
+    context_length: 6400

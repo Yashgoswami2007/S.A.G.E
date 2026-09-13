@@ -26,6 +26,7 @@ class ModelConfig(BaseModel):
     context_length: int
     status: str = "UNAVAILABLE"  # READY, DEGRADED, UNAVAILABLE
     fallback_model_id: Optional[str] = None  # id of model to try if this one fails
+    pre_started: bool = False  # True = server already running externally; skip spawn, just health-check
 
 class ModelRegistry:
     def __init__(self, registry_path: str):

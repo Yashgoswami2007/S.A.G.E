@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings
 from sage.api import health, auth, admin, chat, tasks, rag
+from sage.auth.middleware import AuthMiddleware
 from sage.models.lifecycle import ModelLifecycleManager
 
 from sage.models.registry import ModelRegistry

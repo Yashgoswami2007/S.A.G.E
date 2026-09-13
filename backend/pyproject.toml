@@ -24,7 +24,8 @@ dependencies = [
     "redis>=5.0.1",
     "httpx>=0.26.0",
     "structlog>=24.1.0",
-    "aiofiles>=23.2.1"
+    "aiofiles>=23.2.1",
+    "python-multipart>=0.0.9"
 ]
 
 [project.optional-dependencies]

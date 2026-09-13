@@ -58,6 +58,16 @@ class ModelLifecycleManager:
                 
             if model.auto_start:
                 await self._start_server(model)
+            elif model.pre_started:
+                # Server is externally managed (e.g. user launched llama-server manually).
+                # Skip spawning; just start the health-check loop which will mark it READY.
+                logger.info(
+                    f"Model {model.id} is pre-started (external server on port {model.server_port}). "
+                    "Starting health-check loop — will mark READY when it responds."
+                )
+                model.status = "DEGRADED"  # Will flip to READY once health check passes
+                task = asyncio.create_task(self._health_check_loop(model))
+                self._health_tasks[model.id] = task
             else:
                 logger.info(f"Model {model.id} is configured for on-demand loading.")
                 model.status = "UNAVAILABLE"
