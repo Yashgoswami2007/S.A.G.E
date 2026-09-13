@@ -5,6 +5,7 @@ import {
   ChevronDown,
   FileText,
   Image as ImageIcon,
+  Loader2,
   Paperclip,
   Plus,
   Settings2,
@@ -20,11 +21,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { STYLES, uid, type Attachment } from "@/lib/sage-store";
+import { STYLES, uid, type Attachment, type ModelInfo, DEFAULT_MODELS } from "@/lib/sage-store";
 import { PROFILES } from "@/routes/index";
 import { toast } from "sonner";
 
-const MAX_BYTES = 4 * 1024 * 1024;
+
 
 export function Composer({
   onSend,
@@ -40,11 +41,12 @@ export function Composer({
   onOpenConnectors,
   connectedCount,
   compact,
+  modelLoading,
 }: {
   onSend: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
   streaming: boolean;
-  models: {id: string, name: string, blurb: string}[];
+  models: ModelInfo[];
   model: string;
   onModelChange: (id: string) => void;
   style: string;
@@ -54,6 +56,7 @@ export function Composer({
   onOpenConnectors: () => void;
   connectedCount: number;
   compact?: boolean;
+  modelLoading?: boolean;
 }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -61,26 +64,62 @@ export function Composer({
   const imageRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const activeModel = models.find((m) => m.id === model) ?? models[0] ?? { name: "Local Model" };
+  const activeModel = models.find((m) => m.id === model) ?? models[0] ?? { name: "Local Model", supports_image_upload: false, supports_vision: false, status: "UNAVAILABLE" };
+  const selectedModel: ModelInfo = models.find((m) => m.id === model) ?? models[0] ?? DEFAULT_MODELS[0]!;
   const activeStyle = STYLES.find((s) => s.id === style) ?? STYLES[0];
 
   async function handleFiles(list: FileList | null) {
     if (!list) return;
     const next: Attachment[] = [];
     for (const file of Array.from(list)) {
-      if (file.size > MAX_BYTES) {
-        toast.error(`${file.name} is larger than 4 MB`);
-        continue;
-      }
       const isImage = file.type.startsWith("image/");
-      const data = isImage ? await readAsDataUrl(file) : await file.text();
+      const isText = file.type.startsWith("text/") || /\.(txt|md|py|js|ts|json|csv|xml|yaml|yml|toml|ini|cfg|log|sh|bat|ps1|rb|go|rs|c|cpp|h|java|sql)$/i.test(file.name);
+
+      let data = "";
+      let kind: "image" | "text" | "document" = "document";
+      let serverPath: string | undefined;
+
+      if (isImage) {
+        // Images: read as data URL for inline preview AND upload to server
+        data = await readAsDataUrl(file);
+        kind = "image";
+      } else if (isText) {
+        // Text files: read content for inline display
+        data = await file.text();
+        kind = "text";
+      } else {
+        // Documents (PDF, DOCX, XLSX, etc.): upload to server only
+        data = `[${file.name}] (${formatSize(file.size)})`;
+        kind = "document";
+      }
+
+      // Upload file to backend server
+      try {
+        const formData = new FormData();
+        formData.append("files", file);
+        formData.append("session_id", "default");
+        const uploadResp = await fetch("/api/upload", { method: "POST", body: formData });
+        if (uploadResp.ok) {
+          const uploadData = await uploadResp.json();
+          if (uploadData.paths && uploadData.paths.length > 0) {
+            serverPath = uploadData.paths[0];
+          }
+        } else {
+          toast.error(`Failed to upload ${file.name}`);
+        }
+      } catch (err) {
+        toast.error(`Upload error: ${file.name}`);
+        console.error("Upload error:", err);
+      }
+
       next.push({
         id: uid(),
         name: file.name,
-        mime: file.type || "text/plain",
+        mime: file.type || "application/octet-stream",
         size: file.size,
         data,
-        kind: isImage ? "image" : "text",
+        kind,
+        serverPath: serverPath || undefined,
       });
     }
     if (next.length) setAttachments((prev) => [...prev, ...next]);
@@ -89,7 +128,7 @@ export function Composer({
   function submit() {
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
-    if (streaming) return;
+    if (streaming || modelLoading) return;
     onSend(trimmed, attachments);
     setText("");
     setAttachments([]);
@@ -111,7 +150,12 @@ export function Composer({
                 ) : (
                   <FileText className="h-4 w-4 text-muted-foreground" />
                 )}
-                <span className="max-w-36 truncate text-xs">{a.name}</span>
+                <div className="flex flex-col">
+                  <span className="max-w-36 truncate text-xs">{a.name}</span>
+                  {a.serverPath && (
+                    <span className="text-[10px] text-emerald-500">✓ Uploaded</span>
+                  )}
+                </div>
                 <button
                   type="button"
                   aria-label={`Remove ${a.name}`}
@@ -161,9 +205,17 @@ export function Composer({
               <DropdownMenuItem onSelect={() => fileRef.current?.click()}>
                 <Paperclip className="h-4 w-4" /> Upload a file
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => imageRef.current?.click()}>
-                <ImageIcon className="h-4 w-4" /> Add photos
-              </DropdownMenuItem>
+              {selectedModel.supports_image_upload && (
+                <DropdownMenuItem onSelect={() => imageRef.current?.click()}>
+                  <ImageIcon className="h-4 w-4" /> Add photos
+                </DropdownMenuItem>
+              )}
+              {!selectedModel.supports_image_upload && (
+                <DropdownMenuItem disabled className="opacity-50">
+                  <ImageIcon className="h-4 w-4" /> Add photos
+                  <span className="ml-auto text-[10px] text-muted-foreground">Vision model required</span>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={onOpenConnectors}>
                 <Blocks className="h-4 w-4" /> Connectors
@@ -216,17 +268,40 @@ export function Composer({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-8 gap-1 rounded-full px-2.5 text-xs">
-                  {activeModel.name}
+                  {modelLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <span
+                      className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${
+                        selectedModel.status === "READY" ? "bg-emerald-500" :
+                        selectedModel.status === "DEGRADED" ? "bg-amber-500" :
+                        "bg-zinc-400"
+                      }`}
+                    />
+                  )}
+                  {modelLoading ? "Loading…" : activeModel.name}
                   <ChevronDown className="h-3.5 w-3.5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuContent align="end" className="w-72">
                 <DropdownMenuLabel>Model</DropdownMenuLabel>
                 {models.map((m) => (
-                  <DropdownMenuItem key={m.id} onSelect={() => onModelChange(m.id)}>
-                    <div>
-                      <p className="text-sm">{m.name}</p>
-                      <p className="text-xs text-muted-foreground">{m.blurb}</p>
+                  <DropdownMenuItem key={m.id} onSelect={() => onModelChange(m.id)} disabled={modelLoading === true}>
+                    <div className="flex w-full items-start gap-2">
+                      <span
+                        className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${
+                          m.status === "READY" ? "bg-emerald-500" :
+                          m.status === "DEGRADED" ? "bg-amber-500" :
+                          "bg-zinc-400"
+                        }`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm">{m.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {m.blurb}
+                          {m.status !== "READY" && " · Click to load"}
+                        </p>
+                      </div>
                     </div>
                   </DropdownMenuItem>
                 ))}
@@ -241,6 +316,15 @@ export function Composer({
                 aria-label="Stop response"
               >
                 <Square className="h-3.5 w-3.5" />
+              </Button>
+            ) : modelLoading ? (
+              <Button
+                size="icon"
+                className="h-8 w-8 rounded-full"
+                disabled
+                aria-label="Loading model"
+              >
+                <Loader2 className="h-4 w-4 animate-spin" />
               </Button>
             ) : (
               <Button
@@ -261,6 +345,7 @@ export function Composer({
         ref={fileRef}
         type="file"
         multiple
+        accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.py,.js,.ts,.json,.xml,.yaml,.yml,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tiff,.pptx,.ppt,.zip,.tar,.gz"
         className="hidden"
         onChange={(e) => {
           void handleFiles(e.target.files);
@@ -289,4 +374,10 @@ function readAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

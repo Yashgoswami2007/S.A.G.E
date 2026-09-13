@@ -6,6 +6,14 @@ from sage.core.utils import generate_id, utc_now
 
 class AgentState(str, Enum):
     PLANNING = "PLANNING"
+    CAPABILITY_CHECK = "CAPABILITY_CHECK"
+    CAPABILITY_MISSING = "CAPABILITY_MISSING"
+    TOOL_SYNTHESIS = "TOOL_SYNTHESIS"
+    TOOL_GENERATION = "TOOL_GENERATION"
+    TOOL_VALIDATION = "TOOL_VALIDATION"
+    SANDBOX_TEST = "SANDBOX_TEST"
+    TOOL_APPROVED = "TOOL_APPROVED"
+    TOOL_REGISTERED = "TOOL_REGISTERED"
     ACTING = "ACTING"
     OBSERVING = "OBSERVING"
     REFLECTING = "REFLECTING"
@@ -20,7 +28,7 @@ class TraceEvent(BaseModel):
     task_id: str
     step_id: Optional[int] = None
     agent_state: AgentState
-    profile: str
+    profile: str = "default"
     selected_model: Optional[str] = None
     routing_reason: Optional[str] = None
     tool_name: Optional[str] = None
@@ -31,6 +39,7 @@ class TraceEvent(BaseModel):
     error: Optional[str] = None
     reflection: Optional[str] = None
     token: Optional[str] = None
+    synthesis_info: Optional[Dict[str, Any]] = None
 
 class ExecutionTrace(BaseModel):
     task_id: str

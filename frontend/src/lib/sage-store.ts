@@ -6,9 +6,11 @@ export type Attachment = {
   name: string;
   mime: string;
   size: number;
-  /** data URL for images, plain text for text files */
+  /** data URL for images, plain text for text files, status text for uploaded docs */
   data: string;
-  kind: "image" | "text";
+  kind: "image" | "text" | "document";
+  /** Workspace-relative path on the server after upload */
+  serverPath?: string | undefined;
 };
 
 export type ServerAttachment = {
@@ -48,28 +50,96 @@ export type Connector = {
   enabled: boolean;
 };
 
-export const DEFAULT_MODELS = [
-  { id: "default", name: "Local Model", blurb: "Default local model" },
+export type ModelInfo = {
+  id: string;
+  name: string;
+  status: "READY" | "DEGRADED" | "UNAVAILABLE";
+  capabilities: string[];
+  supports_vision: boolean;
+  supports_image_upload: boolean;
+  supports_files: boolean;
+  min_vram_gb: number;
+  context_length: number;
+  is_default: boolean;
+  blurb: string;
+};
+
+export const DEFAULT_MODELS: ModelInfo[] = [
+  {
+    id: "default",
+    name: "Local Model",
+    status: "UNAVAILABLE",
+    capabilities: ["reasoning", "general"],
+    supports_vision: false,
+    supports_image_upload: false,
+    supports_files: true,
+    min_vram_gb: 5,
+    context_length: 8192,
+    is_default: true,
+    blurb: "Default local model",
+  },
 ];
 
+function _makeBlurb(m: { capabilities: string[]; min_vram_gb: number; status: string; is_default: boolean }): string {
+  const caps = m.capabilities.filter(c => c !== "general");
+  const parts: string[] = [];
+  if (caps.includes("vision")) parts.push("Vision");
+  if (caps.includes("coding")) parts.push("Coding");
+  if (caps.includes("reasoning")) parts.push("Reasoning");
+  let blurb = parts.join(" · ") || "General purpose";
+  blurb += ` · ~${m.min_vram_gb}GB`;
+  if (m.is_default) blurb += " · Default";
+  return blurb;
+}
+
 export function useModels() {
-  const [models, setModels] = useState<{id: string, name: string, blurb: string}[]>(DEFAULT_MODELS);
+  const [models, setModels] = useState<ModelInfo[]>(DEFAULT_MODELS);
 
   useEffect(() => {
+    let isMounted = true;
     fetch("/api/models")
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          console.warn("[useModels] Server returned non-OK status:", res.status, errData);
+          return null;
+        }
+        return res.json().catch(() => null);
+      })
       .then((data) => {
-        if (data && data.data && data.data.length > 0) {
-          setModels(
-            data.data.map((m: any) => ({
-              id: m.id,
-              name: m.id,
-              blurb: "Local model loaded in llama-server",
-            }))
-          );
+        if (!isMounted || !data) return;
+        if (Array.isArray(data.models) && data.models.length > 0) {
+          const mapped: ModelInfo[] = data.models.map((m: any) => ({
+            id: m.id,
+            name: m.name,
+            status: m.status || "UNAVAILABLE",
+            capabilities: m.capabilities || ["reasoning", "general"],
+            supports_vision: m.supports_vision ?? false,
+            supports_image_upload: m.supports_image_upload ?? false,
+            supports_files: m.supports_files ?? true,
+            min_vram_gb: m.min_vram_gb ?? 5,
+            context_length: m.context_length ?? 8192,
+            is_default: m.is_default ?? false,
+            blurb: _makeBlurb(m),
+          }));
+          // Sort: default model first, then by READY status, then by priority
+          mapped.sort((a, b) => {
+            if (a.is_default && !b.is_default) return -1;
+            if (!a.is_default && b.is_default) return 1;
+            if (a.status === "READY" && b.status !== "READY") return -1;
+            if (a.status !== "READY" && b.status === "READY") return 1;
+            return 0;
+          });
+          setModels(mapped);
         }
       })
-      .catch(console.error);
+      .catch((err) => {
+        console.warn("[useModels] Network or parsing error fetching models, retaining fallback models:", err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   return models;

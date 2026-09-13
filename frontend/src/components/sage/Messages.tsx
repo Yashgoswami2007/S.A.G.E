@@ -52,6 +52,15 @@ export function MessageItem({
     );
   }
 
+  const hasError = Boolean(message.events?.some((e) => e.type === "ERROR"));
+  const isWaiting = Boolean(
+    streaming &&
+      !hasError &&
+      (!message.events ||
+        message.events.length === 0 ||
+        message.events[message.events.length - 1]!.type !== "FINAL"),
+  );
+
   return (
     <div className="flex gap-3">
       <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -100,34 +109,39 @@ export function MessageItem({
               });
             })()}
           </div>
-        ) : (
-          !message.events || message.events.length === 0 || (message.events[message.events.length - 1]!.type !== "FINAL" && message.events[message.events.length - 1]!.type !== "ERROR") ? (
-            <ThinkingDots />
-          ) : null
-        )}
+        ) : isWaiting ? (
+          <ThinkingDots />
+        ) : null}
 
-        {!streaming && message.content && (
-          <div className="mt-2 flex items-center gap-1 text-muted-foreground">
-            <button
-              type="button"
-              aria-label="Copy response"
-              className="rounded-md p-1.5 transition-colors hover:bg-accent hover:text-foreground"
-              onClick={() => {
-                void navigator.clipboard.writeText(message.content);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1600);
-              }}
-            >
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            </button>
+        {!streaming && (message.content || hasError) && (
+          <div className="mt-2 flex items-center gap-1.5 text-muted-foreground">
+            {message.content ? (
+              <button
+                type="button"
+                aria-label="Copy response"
+                className="rounded-md p-1.5 transition-colors hover:bg-accent hover:text-foreground"
+                onClick={() => {
+                  void navigator.clipboard.writeText(message.content);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1600);
+                }}
+              >
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            ) : null}
             {onRetry && (
               <button
                 type="button"
                 aria-label="Retry response"
-                className="rounded-md p-1.5 transition-colors hover:bg-accent hover:text-foreground"
+                className={`flex items-center gap-1.5 rounded-md p-1.5 text-xs transition-colors hover:bg-accent hover:text-foreground ${
+                  hasError
+                    ? "border border-amber-500/30 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 px-2.5 py-1"
+                    : ""
+                }`}
                 onClick={onRetry}
               >
                 <RefreshCw className="h-3.5 w-3.5" />
+                {hasError && <span>Retry request</span>}
               </button>
             )}
           </div>

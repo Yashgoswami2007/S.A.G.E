@@ -13,16 +13,48 @@ import {
   ListTodo,
   Loader2,
   Edit3,
-  Brain
+  Brain,
+  Code2,
+  FileOutput,
+  Clock,
+  ShieldAlert,
+  Ban,
+  Shield,
 } from "lucide-react";
 import type { AgentEvent } from "@/lib/agent-events";
 
 export function AgentEventRenderer({ events }: { events: AgentEvent[] }) {
+  const latestToolFactoryEvents = new Map<string, Extract<AgentEvent, { type: "TOOL_SYNTHESIS_PROGRESS" }>>();
+  const rendered: (AgentEvent | { type: "TOOL_FACTORY_PLACEHOLDER"; id: string })[] = [];
+  
+  let fallbackIdCounter = 0;
+
+  for (const event of events) {
+    if (event.type === "TOOL_SYNTHESIS_PROGRESS") {
+      let id = event.tool_factory_id;
+      if (!id) {
+        id = `fallback-${fallbackIdCounter++}`;
+      }
+      
+      if (!latestToolFactoryEvents.has(id)) {
+        rendered.push({ type: "TOOL_FACTORY_PLACEHOLDER", id });
+      }
+      latestToolFactoryEvents.set(id, event);
+    } else {
+      rendered.push(event);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3 my-4">
-      {events.map((evt, idx) => (
-        <EventSwitch key={idx} event={evt} />
-      ))}
+      {rendered.map((item, idx) => {
+        if ("type" in item && item.type === "TOOL_FACTORY_PLACEHOLDER") {
+           const latestEvent = latestToolFactoryEvents.get(item.id);
+           if (!latestEvent) return null;
+           return <ToolSynthesisBlock key={`tool-factory-${item.id}`} event={latestEvent} />;
+        }
+        return <EventSwitch key={idx} event={item as AgentEvent} />;
+      })}
     </div>
   );
 }
@@ -44,19 +76,17 @@ function EventSwitch({ event }: { event: AgentEvent }) {
     case "COMMAND_STARTED":
     case "COMMAND_FINISHED":
       return <CommandBlock event={event} />;
+    case "SANDBOX_STARTED":
+    case "SANDBOX_FINISHED":
+      return <SandboxBlock event={event} />;
+    case "DOCUMENT_GENERATED":
+      return <DocumentGeneratedBadge event={event} />;
     case "ERROR":
       return <ErrorBanner event={event} />;
     case "CONFIRMATION_REQUIRED":
-      // Confirmations are usually handled by a modal at the page level
-      return (
-        <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-600 dark:text-orange-400">
-          <div className="flex items-center gap-2 font-semibold">
-            <AlertTriangle className="h-4 w-4" />
-            Action requires your approval
-          </div>
-          <div className="mt-1 opacity-90">{event.description}</div>
-        </div>
-      );
+      return <ConfirmationCard event={event} />;
+    case "TOOL_SYNTHESIS_PROGRESS":
+      return <ToolSynthesisBlock event={event} />;
     case "FINAL":
     case "TOKEN":
       return null;
@@ -218,11 +248,229 @@ function CommandBlock({ event }: { event: Extract<AgentEvent, { type: "COMMAND_S
 
 function ErrorBanner({ event }: { event: Extract<AgentEvent, { type: "ERROR" }> }) {
   return (
-    <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400 flex items-start gap-3">
-      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-      <div>
-        <div className="font-semibold">Error</div>
-        <div className="mt-1 opacity-90">{event.message}</div>
+    <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600 dark:text-red-400 flex items-start gap-3">
+      <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
+      <div className="flex-1 space-y-1">
+        <div className="flex items-center justify-between gap-2 font-semibold">
+          <span>{event.recoverable ? "Generation Issue" : "System Error"}</span>
+          {event.recoverable && (
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+              Recoverable
+            </span>
+          )}
+        </div>
+        <div className="text-[13px] leading-relaxed opacity-95">{event.message}</div>
+      </div>
+    </div>
+  );
+}
+
+function SandboxBlock({ event }: { event: Extract<AgentEvent, { type: "SANDBOX_STARTED" | "SANDBOX_FINISHED" }> }) {
+  const isFinished = event.type === "SANDBOX_FINISHED";
+  const [open, setOpen] = useState(true);
+
+  return (
+    <div className="rounded-xl overflow-hidden border border-border bg-[#0d1117] text-gray-300 font-mono text-[12px]">
+      <div className="flex items-center justify-between bg-black/40 px-3 py-2 border-b border-border/50">
+        <div className="flex items-center gap-2">
+          <Code2 className="h-3.5 w-3.5 text-primary" />
+          <span>
+            {event.type === "SANDBOX_STARTED"
+              ? `Running ${(event as any).language} code...`
+              : "Code execution"}
+          </span>
+          {isFinished && (
+            <span className="flex items-center gap-1 text-[10px] text-gray-500">
+              <Clock className="h-3 w-3" />
+              {((event as any).duration_ms / 1000).toFixed(2)}s
+            </span>
+          )}
+        </div>
+        {!isFinished ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        ) : (
+          <button onClick={() => setOpen(!open)}>
+            {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </button>
+        )}
+      </div>
+
+      {/* Show code preview for SANDBOX_STARTED */}
+      {event.type === "SANDBOX_STARTED" && (event as any).code && (
+        <div className="p-3 overflow-x-auto max-h-40 border-b border-border/30 bg-[#161b22]">
+          <pre className="whitespace-pre-wrap text-blue-300">{(event as any).code}</pre>
+        </div>
+      )}
+
+      {/* Show output for SANDBOX_FINISHED */}
+      {isFinished && open && (
+        <div className="p-3 overflow-x-auto max-h-60">
+          {(event as any).stdout && (
+            <div className="whitespace-pre-wrap mb-2">{(event as any).stdout}</div>
+          )}
+          {(event as any).stderr && (
+            <div className="whitespace-pre-wrap text-red-400 mb-2">{(event as any).stderr}</div>
+          )}
+          <div className={`mt-1 text-[11px] ${(event as any).exit_code === 0 ? "text-emerald-400" : "text-red-400"}`}>
+            Exit code: {(event as any).exit_code}
+          </div>
+          {(event as any).files_created?.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {(event as any).files_created.map((f: string, i: number) => (
+                <span key={i} className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] text-emerald-400">
+                  <FileOutput className="h-3 w-3" />
+                  {f.split('/').pop() || f.split('\\').pop()}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DocumentGeneratedBadge({ event }: { event: Extract<AgentEvent, { type: "DOCUMENT_GENERATED" }> }) {
+  const typeLabel: Record<string, string> = {
+    docx: "📄 Word",
+    xlsx: "📊 Excel",
+    pptx: "📽️ PowerPoint",
+    pdf: "📕 PDF",
+  };
+  const label = typeLabel[event.doc_type] || `📎 ${event.doc_type.toUpperCase()}`;
+  const filename = event.path.split('/').pop() || event.path.split('\\').pop();
+
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary">
+      <FileOutput className="h-3.5 w-3.5" />
+      <span>{label}: <strong>{filename}</strong></span>
+      <span className="opacity-60 text-[10px]">({Math.round(event.size_bytes / 1024)} KB)</span>
+    </div>
+  );
+}
+
+function ConfirmationCard({ event }: { event: Extract<AgentEvent, { type: "CONFIRMATION_REQUIRED" }> }) {
+  const [status, setStatus] = useState<"pending" | "approved" | "rejected">("pending");
+  const [loading, setLoading] = useState(false);
+
+  const handleDecision = async (approved: boolean) => {
+    if (status !== "pending" || loading) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/chat/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: event.request_id, approved }),
+      });
+      if (!res.ok) {
+        console.error("Approval request failed:", await res.text());
+        setLoading(false);
+        return;
+      }
+      setStatus(approved ? "approved" : "rejected");
+    } catch (err) {
+      console.error("Failed to send approval decision:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Build argument display lines
+  const argEntries = Object.entries(
+    event.tool_args ?? {}
+  ).filter(([, v]) => v !== undefined && v !== null);
+
+  if (status === "approved") {
+    return (
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600 dark:text-emerald-400">
+        <div className="flex items-center gap-2 font-semibold">
+          <Shield className="h-4 w-4" />
+          Approved — {event.action}
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "rejected") {
+    return (
+      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">
+        <div className="flex items-center gap-2 font-semibold">
+          <Ban className="h-4 w-4" />
+          Rejected — {event.action}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-orange-500/30 bg-orange-500/10 p-4 text-sm">
+      <div className="flex items-center gap-2 font-semibold text-orange-600 dark:text-orange-400">
+        <ShieldAlert className="h-4 w-4" />
+        Action requires your approval
+      </div>
+      <div className="mt-2 space-y-2 text-foreground/90">
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground text-xs">Tool:</span>
+          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{event.action}</code>
+        </div>
+        {argEntries.length > 0 && (
+          <div className="rounded-lg bg-[#0d1117] p-3 font-mono text-[12px] text-gray-300 overflow-x-auto max-h-40">
+            {argEntries.map(([k, v]) => (
+              <div key={k} className="whitespace-pre-wrap">
+                <span className="text-gray-500">{k}:</span>{" "}
+                {typeof v === "string" ? v : JSON.stringify(v, null, 2)}
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground">{event.description}</p>
+      </div>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button
+          onClick={() => handleDecision(false)}
+          disabled={loading}
+          className="rounded-lg border border-border bg-background px-4 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button
+          onClick={() => handleDecision(true)}
+          disabled={loading}
+          className="rounded-lg bg-orange-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-orange-600 disabled:opacity-50"
+        >
+          {loading ? "Processing..." : "Approve"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ToolSynthesisBlock({ event }: { event: Extract<AgentEvent, { type: "TOOL_SYNTHESIS_PROGRESS" }> }) {
+  return (
+    <div className="rounded-xl overflow-hidden border border-border bg-card text-foreground text-[13px]">
+      <div className="flex items-center justify-between bg-muted/40 px-3 py-2 border-b border-border/50">
+        <div className="flex items-center gap-2 text-primary">
+          <Wrench className="h-3.5 w-3.5" />
+          <span className="font-medium">Tool Factory: {event.stage}</span>
+        </div>
+        {event.stage !== "COMPLETED" && event.stage !== "FAILED" && event.stage !== "CANCELLED" && (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        )}
+      </div>
+      <div className="p-3">
+        <div className="flex flex-col gap-1.5 text-muted-foreground">
+          <div>{event.message}</div>
+          {event.tool_name && event.tool_name !== "unknown" && (
+            <div className="font-mono text-[11px] text-primary/80">
+              Tool: <strong>{event.tool_name}</strong>
+            </div>
+          )}
+          {event.attempt !== undefined && event.max_attempts !== undefined && (
+            <div className="text-amber-500/80 font-mono text-[11px]">
+              Repair attempt {event.attempt} of {event.max_attempts}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

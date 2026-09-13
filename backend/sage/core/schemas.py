@@ -7,9 +7,20 @@ class HealthResponse(BaseModel):
     models: list[dict[str, Any]]
     gpu: dict[str, Any] | None = None
 
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    status_code: int | None = None
+    details: dict[str, Any] = {}
+
+class ErrorResponseEnvelope(BaseModel):
+    error: ErrorDetail
+    detail: str  # For backward-compatibility with standard FastAPI clients
+
 class ErrorResponse(BaseModel):
     error: str
     message: str
+
 
 class TokenPair(BaseModel):
     access_token: str

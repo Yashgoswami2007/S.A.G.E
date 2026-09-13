@@ -19,7 +19,7 @@ def health():
     """Check the health of the SAGE backend."""
     console.print(f"Pinging SAGE backend at [bold blue]{config.backend_url}[/bold blue]...")
     try:
-        response = httpx.get(f"{config.backend_url}/health", timeout=5.0)
+        response = httpx.get(f"{config.backend_url}/health", timeout=10.0)
         response.raise_for_status()
         data = response.json()
         
@@ -31,7 +31,7 @@ def health():
         table.add_column("Status", style=color)
         
         for srv, val in data.get("services", {}).items():
-            table.add_row(srv.capitalize(), val)
+            table.add_row(srv.capitalize(), str(val))
             
         console.print(table)
         
@@ -42,11 +42,13 @@ def health():
             m_table.add_column("Name", style="blue")
             m_table.add_column("Capabilities", style="yellow")
             for m in models:
-                m_table.add_row(m["id"], m["name"], ", ".join(m["capabilities"]))
+                m_table.add_row(m.get("id", ""), m.get("name", ""), ", ".join(m.get("capabilities", [])))
             console.print(m_table)
             
     except httpx.ConnectError:
-        console.print(f"[bold red]Error:[/bold red] Could not connect to backend at {config.backend_url}")
+        console.print(f"[bold red]Connection Error:[/bold red] Could not connect to backend at {config.backend_url}. Is the SAGE backend running?")
+    except httpx.TimeoutException:
+        console.print(f"[bold red]Timeout Error:[/bold red] Health check request to {config.backend_url} timed out.")
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
 
@@ -56,7 +58,8 @@ def health():
 @app.command()
 def ask(
     prompt: str = typer.Argument(..., help="Prompt/task for the SAGE agent"),
-    profile: str = typer.Option("general", "--profile", "-p", help="Agent profile to use (analyst, coder, inspector, general)")
+    profile: str = typer.Option("general", "--profile", "-p", help="Agent profile to use (analyst, coder, inspector, general)"),
+    timeout: float = typer.Option(300.0, "--timeout", "-t", help="Timeout in seconds for agent execution (default: 300s)")
 ):
     """Submit a task to the SAGE Agent Core and view live step progress & trace."""
     console.print(Panel(f"[bold cyan]Task:[/bold cyan] {prompt}\n[bold yellow]Profile:[/bold yellow] {profile}", title="SAGE Agent Request"))
@@ -69,9 +72,19 @@ def ask(
 
     try:
         with console.status("[bold green]Executing Agent Task...[/bold green]"):
-            resp = httpx.post(url, json=payload, timeout=60.0)
+            resp = httpx.post(url, json=payload, timeout=timeout)
             if resp.status_code != 200:
-                console.print(f"[bold red]Error ({resp.status_code}):[/bold red] {resp.text}")
+                err_msg = resp.text
+                try:
+                    err_data = resp.json()
+                    err_msg = err_data.get("error", {}).get("message") or err_data.get("detail") or err_msg
+                except Exception:
+                    pass
+                console.print(Panel(
+                    f"[bold red]Status:[/bold red] {resp.status_code}\n[bold red]Detail:[/bold red] {err_msg}",
+                    title="[bold red]SAGE Execution Failed[/bold red]",
+                    border_style="red"
+                ))
                 return
             data = resp.json()
 
@@ -95,15 +108,17 @@ def ask(
             state = ev.get("agent_state", "")
             tool = ev.get("tool_name") or "-"
             result = ev.get("tool_result") or ev.get("reflection") or ev.get("error") or "-"
-            if len(result) > 80:
-                result = result[:77] + "..."
-            table.add_row(str(idx), state, tool, result)
+            if len(str(result)) > 80:
+                result = str(result)[:77] + "..."
+            table.add_row(str(idx), str(state), str(tool), str(result))
 
         console.print(table)
         console.print("\n" + Panel(output, title=f"Final Output ({status})", border_style="green" if status == "COMPLETED" else "red"))
 
     except httpx.ConnectError:
-        console.print(f"[bold red]Error:[/bold red] Could not connect to SAGE backend at {config.backend_url}")
+        console.print(f"[bold red]Connection Error:[/bold red] Could not connect to SAGE backend at {config.backend_url}. Please ensure the server is running.")
+    except httpx.TimeoutException:
+        console.print(f"[bold red]Timeout Error:[/bold red] Agent request timed out after {timeout}s. The model may be running intensive inference or the backend is busy.")
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
 

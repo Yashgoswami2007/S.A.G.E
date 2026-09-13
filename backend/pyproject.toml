@@ -25,7 +25,20 @@ dependencies = [
     "httpx>=0.26.0",
     "structlog>=24.1.0",
     "aiofiles>=23.2.1",
-    "python-multipart>=0.0.9"
+    "python-multipart>=0.0.9",
+    # Document reading
+    "PyMuPDF>=1.24.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "Pillow>=10.0.0",
+    # OCR
+    "pytesseract>=0.3.10",
+    # Document generation
+    "docxtpl>=0.18.0",
+    "python-pptx>=1.0.0",
+    # PDF generation (Markdown → HTML → PDF)
+    "markdown>=3.5.0",
+    "xhtml2pdf>=0.2.11"
 ]
 
 [project.optional-dependencies]

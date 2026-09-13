@@ -13,10 +13,14 @@ export type AgentEvent =
   | { type: "FILE_MODIFIED"; path: string; diff_summary: string }
   | { type: "COMMAND_STARTED"; command: string; step_id: number }
   | { type: "COMMAND_FINISHED"; exit_code: number; stdout: string; stderr: string }
+  | { type: "SANDBOX_STARTED"; sandbox_id: string; language: string; code: string }
+  | { type: "SANDBOX_FINISHED"; sandbox_id: string; exit_code: number; stdout: string; stderr: string; duration_ms: number; files_created: string[] }
+  | { type: "DOCUMENT_GENERATED"; path: string; doc_type: string; size_bytes: number }
   | { type: "ERROR"; message: string; recoverable: boolean }
-  | { type: "CONFIRMATION_REQUIRED"; action: string; description: string; request_id: string }
+  | { type: "CONFIRMATION_REQUIRED"; action: string; description: string; request_id: string; tool_args?: Record<string, any> }
   | { type: "FINAL"; content: string }
-  | { type: "TOKEN"; token: string };
+  | { type: "TOKEN"; token: string }
+  | { type: "TOOL_SYNTHESIS_PROGRESS"; stage: string; message: string; attempt?: number; max_attempts?: number; tool_name?: string; tool_factory_id?: string };
 
 export function parseAgentEvent(line: string): AgentEvent | null {
   const trimmed = line.trim();

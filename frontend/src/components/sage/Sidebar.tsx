@@ -1,8 +1,9 @@
-import { Blocks, MessageSquare, PanelLeft, Plus, Search, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Blocks, MessageSquare, PanelLeft, Plus, Search, Settings, Trash2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
 import { SageWordmark } from "./SageLogo";
 import { groupChats, type Chat } from "@/lib/sage-store";
 import { Button } from "@/components/ui/button";
+import { SystemMonitor } from "./SystemMonitor";
 
 export function Sidebar({
   chats,
@@ -11,6 +12,7 @@ export function Sidebar({
   onNew,
   onDelete,
   onOpenConnectors,
+  onOpenSettings,
   open,
   onToggle,
 }: {
@@ -20,10 +22,33 @@ export function Sidebar({
   onNew: () => void;
   onDelete: (id: string) => void;
   onOpenConnectors: () => void;
+  onOpenSettings: () => void;
   open: boolean;
   onToggle: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [monitorOpen, setMonitorOpen] = useState(false);
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleMouseEnter = () => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+    setMonitorOpen(true);
+  };
+
+  const handleMouseLeave = () => {
+    hoverTimeoutRef.current = setTimeout(() => {
+      setMonitorOpen(false);
+    }, 200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    };
+  }, []);
+
   const filtered = query
     ? chats.filter((c) => c.title.toLowerCase().includes(query.toLowerCase()))
     : chats;
@@ -116,15 +141,41 @@ export function Sidebar({
           ))}
         </div>
 
-        <div className="border-t border-sidebar-border p-3">
+        <div className="border-t border-sidebar-border p-3 relative">
+          <div 
+            className="absolute bottom-full left-3 right-3 mb-2 transition-all duration-200 z-50"
+            style={{ 
+              opacity: monitorOpen ? 1 : 0, 
+              pointerEvents: monitorOpen ? 'auto' : 'none',
+              transform: monitorOpen ? 'translateY(0)' : 'translateY(10px)'
+            }}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+          >
+            <SystemMonitor enabled={monitorOpen} />
+          </div>
+
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
-              Y
+            <div 
+              className="flex flex-1 items-center gap-2 cursor-pointer hover:bg-sidebar-accent p-2 -m-2 rounded-lg transition-colors"
+              onMouseEnter={handleMouseEnter}
+              onMouseLeave={handleMouseLeave}
+            >
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">
+                Y
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-sm">You</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm">You</p>
-              <p className="text-xs text-muted-foreground">Free plan</p>
-            </div>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="ml-auto rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              aria-label="Settings"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </aside>
