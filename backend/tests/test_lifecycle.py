@@ -59,8 +59,9 @@ models:
             
         asyncio.run(_test())
 
+    @patch("shutil.which", return_value="llama-server")
     @patch("asyncio.create_subprocess_exec")
-    def test_spawn_marks_degraded_initially(self, mock_create_subprocess):
+    def test_spawn_marks_degraded_initially(self, mock_create_subprocess, mock_which):
         async def _test():
             mock_proc = AsyncMock()
             mock_proc.returncode = None

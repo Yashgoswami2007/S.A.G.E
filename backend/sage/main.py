@@ -11,8 +11,7 @@ if sys.platform == "win32":
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from sage.config import settings
-from sage.auth.middleware import AuthMiddleware
-from sage.api import health, auth, admin, chat, tasks
+from sage.api import health, auth, admin, chat, tasks, rag
 from sage.models.lifecycle import ModelLifecycleManager
 
 from sage.models.registry import ModelRegistry
@@ -75,3 +74,5 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
+

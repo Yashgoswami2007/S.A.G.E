@@ -58,6 +58,14 @@ class ModelRouter:
                 reason = self._make_reason(coder_model, "coding keywords detected in prompt -> selected coding model")
                 return coder_model, reason
 
+        # 3b. Analysis / RAG Knowledge Keywords
+        analysis_keywords = ["sop", "procedure", "manual", "compliance", "standard", "guideline", "threshold", "inspect"]
+        if any(kw in prompt_lower for kw in analysis_keywords):
+            reasoning_model = self._get_best_for_capability("reasoning")
+            if reasoning_model:
+                reason = self._make_reason(reasoning_model, "procedural/SOP keywords detected -> selected reasoning model")
+                return reasoning_model, reason
+
         # 4. Fallback Default
         default_model = self.registry.get_default()
         if not default_model:

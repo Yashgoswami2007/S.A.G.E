@@ -31,6 +31,9 @@ class Planner:
             "  ]\n"
             "}\n\n"
             f"Allowed tools for this profile: {', '.join(profile.allowed_tools)}.\n"
+            "Tool usage guidelines:\n"
+            "- Use 'rag_search' (tool_args: {'query': '...'}) whenever the user asks to check, verify, or retrieve standard operating procedures (SOPs), manuals, safety limits, or refinery standards.\n"
+            "- Use 'rag_ingest' (tool_args: {'path': '...'}) when asked to index or store a file in the knowledge base.\n"
             "If no tools are needed, leave tool_name and tool_args as null."
         )
         

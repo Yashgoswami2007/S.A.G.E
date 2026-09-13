@@ -101,24 +101,24 @@ class ModelLifecycleManager:
         )
 
         if effective_mode == "cpu":
-            logger.info(f"Model {model.id}: gpu_mode=cpu → ngl=0 (CPU-only)")
+            logger.info(f"Model {model.id}: gpu_mode=cpu -> ngl=0 (CPU-only)")
             return 0
 
         if effective_mode == "gpu":
             if not gpu_status.cuda_available:
                 logger.error(
-                    f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected — cannot start"
+                    f"Model {model.id}: gpu_mode=gpu but no CUDA GPU detected -- cannot start"
                 )
                 raise RuntimeError(f"gpu_mode=gpu requires CUDA but no GPU found for {model.id}")
-            logger.info(f"Model {model.id}: gpu_mode=gpu → ngl=99 (forced GPU offload)")
+            logger.info(f"Model {model.id}: gpu_mode=gpu -> ngl=99 (forced GPU offload)")
             return 99
 
         # effective_mode == "auto"
         if not gpu_status.cuda_available:
-            logger.info(f"Model {model.id}: gpu_mode=auto, no CUDA → ngl=0 (CPU fallback)")
+            logger.info(f"Model {model.id}: gpu_mode=auto, no CUDA -> ngl=0 (CPU fallback)")
             return 0
 
-        # CUDA is available — check VRAM fit
+        # CUDA is available -- check VRAM fit
         # Use the GPU with the most free VRAM
         best_gpu = max(gpu_status.gpus, key=lambda g: g.vram_free_mb)
         required_mb = model.min_vram_gb * 1024
@@ -127,7 +127,7 @@ class ModelLifecycleManager:
                 f"Model {model.id}: gpu_mode=auto, "
                 f"needs {model.min_vram_gb} GB, "
                 f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
-                f"→ ngl=99 (GPU offload)"
+                f"-> ngl=99 (GPU offload)"
             )
             return 99
         else:
@@ -135,7 +135,7 @@ class ModelLifecycleManager:
                 f"Model {model.id}: gpu_mode=auto, "
                 f"needs {model.min_vram_gb} GB ({required_mb} MB) but only "
                 f"{best_gpu.vram_free_mb} MB free on {best_gpu.name} "
-                f"→ ngl=0 (CPU fallback — insufficient VRAM)"
+                f"-> ngl=0 (CPU fallback -- insufficient VRAM)"
             )
             return 0
 
