@@ -46,6 +46,25 @@ class ModelConfig(BaseModel):
         """All models support text-extracted file content (PDF, DOCX, etc.)."""
         return True
 
+    @computed_field
+    @property
+    def model_category(self) -> str:
+        """
+        Semantic category derived from capabilities.
+        Used by the lifecycle manager for VRAM scheduling decisions.
+        """
+        if "embedding" in self.capabilities:
+            return "embedding"
+        if "vision" in self.capabilities:
+            return "vision"
+        return "chat"
+
+    @computed_field
+    @property
+    def is_embedding(self) -> bool:
+        """Whether this model serves embeddings (needs --embedding flag)."""
+        return "embedding" in self.capabilities
+
 class ModelRegistry:
     def __init__(self, registry_path: str):
         self.models: dict[str, ModelConfig] = {}

@@ -36,6 +36,7 @@ class ModelLifecycleManager:
         self.registry = registry
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
         self._health_tasks: Dict[str, asyncio.Task] = {}
+        self._model_ref_counts: Dict[str, int] = {}
 
         # GPU status — populated on start_all()
         self.gpu_status: Optional[GPUStatus] = None
@@ -188,6 +189,9 @@ class ModelLifecycleManager:
                 "-c", str(model.context_length),
                 "-ngl", str(effective_ngl)
             ]
+            if model.is_embedding and "--embedding" not in (model.extra_args or []):
+                cmd.append("--embedding")
+                logger.info(f"Model {model.id}: embedding category, adding --embedding flag")
             # Append per-model extra args (e.g. --jinja for gemma-4)
             if model.extra_args:
                 cmd.extend(model.extra_args)
@@ -371,3 +375,100 @@ class ModelLifecycleManager:
         # Add a short delay to ensure VRAM is cleared
         await asyncio.sleep(2)
         return await self.start_model(load_id)
+
+    async def ensure_model(self, model_id: str) -> bool:
+        """
+        Ensure a model is loaded and READY.
+        
+        Called by RAG (for embedding) or any subsystem that needs a specific model.
+        Unlike start_model(), this is ref-counted:
+        - First call loads the model if not already running
+        - Subsequent calls increment the ref count
+        - The model stays loaded until release_model() decrements to 0
+        
+        If VRAM is insufficient, attempts to unload a lower-priority model
+        (respecting category policy).
+        
+        Returns True if the model is READY.
+        """
+        model = self.registry.models.get(model_id)
+        if not model:
+            logger.error(f"ensure_model: {model_id} not in registry")
+            return False
+        
+        # Increment ref count
+        self._model_ref_counts[model_id] = self._model_ref_counts.get(model_id, 0) + 1
+        
+        # Already running?
+        if model.status == "READY":
+            return True
+        
+        # Need to load — check if we need to free VRAM first
+        if not self._has_vram_for(model):
+            candidate = self._pick_unload_candidate(model)
+            if candidate:
+                logger.info(
+                    f"ensure_model: freeing VRAM by unloading {candidate.id} "
+                    f"(category={candidate.model_category}) to load {model_id} "
+                    f"(category={model.model_category})"
+                )
+                await self.stop_model(candidate.id)
+                await asyncio.sleep(2)  # wait for VRAM release
+        
+        return await self.start_model(model_id)
+
+    async def release_model(self, model_id: str):
+        """
+        Signal that a consumer no longer needs this model.
+        
+        Decrements ref count. When ref count reaches 0:
+        - If VRAM is tight, the model becomes eligible for unloading
+        - If VRAM is comfortable, the model stays resident (warm cache)
+        
+        Does NOT immediately unload — that decision is made by the swap
+        logic when another model needs VRAM.
+        """
+        if model_id in self._model_ref_counts:
+            self._model_ref_counts[model_id] = max(0, self._model_ref_counts[model_id] - 1)
+            logger.debug(
+                f"release_model: {model_id} ref_count now {self._model_ref_counts[model_id]}"
+            )
+
+    def _has_vram_for(self, model: ModelConfig) -> bool:
+        """Check if current free VRAM can fit this model."""
+        if not self.gpu_status or not self.gpu_status.cuda_available:
+            return True  # CPU mode — always "fits"
+        best_gpu = max(self.gpu_status.gpus, key=lambda g: g.vram_free_mb)
+        required_mb = model.min_vram_gb * 1024
+        return best_gpu.vram_free_mb >= required_mb
+
+    def _pick_unload_candidate(self, requesting_model: ModelConfig) -> Optional[ModelConfig]:
+        """
+        Pick the best model to unload to make room for `requesting_model`.
+        
+        Policy (in priority order):
+        1. Never unload a model that has ref_count > 0 (actively in use)
+        2. Prefer unloading models of the SAME category as the requester
+           (e.g., swap one chat model for another chat model)
+        3. If no same-category candidate, prefer unloading lower-priority models
+        4. Among equal candidates, prefer the one using more VRAM
+        5. Never unload the requesting model itself
+        """
+        candidates = [
+            m for m in self.registry.list_all()
+            if m.status == "READY"
+            and m.id != requesting_model.id
+            and self._model_ref_counts.get(m.id, 0) == 0  # not actively in use
+        ]
+        
+        if not candidates:
+            return None
+        
+        # Sort: same-category first (to avoid cross-category disruption),
+        # then by priority (higher number = lower importance), then by VRAM (larger first)
+        def sort_key(m: ModelConfig):
+            same_category = 0 if m.model_category == requesting_model.model_category else 1
+            return (same_category, -m.priority, -m.min_vram_gb)
+        
+        candidates.sort(key=sort_key)
+        return candidates[0]

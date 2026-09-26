@@ -140,11 +140,19 @@ class CalculatorTool(BaseTool):
 
     name = "calculator"
     description = (
-        "Safely evaluate mathematical expressions. Supports arithmetic "
-        "(+, -, *, /, //, %, **), trigonometry (sin, cos, tan, etc.), "
-        "logarithms (log, log2, log10), roots (sqrt), and common functions "
-        "(abs, round, min, max, ceil, floor). Constants: pi, e, tau. "
-        "Does NOT support arbitrary Python code — only math expressions."
+        "CRITICAL: The expression must contain ONLY numeric values, mathematical "
+"operators, parentheses, and supported mathematical functions/constants. "
+"NEVER pass semantic labels, variable names, field names, units, natural-"
+"language text, or placeholders such as 'Latest', 'Commissioning', "
+"'temperature', 'vibration', 'current', 'flow', etc. "
+"Before calling this tool, extract the actual numeric values from the "
+"available data and substitute them directly into the expression. "
+"If a required numeric value is missing, do NOT call the calculator; "
+"report that the calculation cannot be performed. "
+"Example: use '((6.0 - 2.5) / 2.5) * 100' instead of "
+"'((Latest - Commissioning) / Commissioning) * 100'. "
+"Only performs numerical calculations; do not provide or execute "
+"arbitrary Python code, variables, strings, or non-mathematical operations."
     )
     permission = ToolPermission.SAFE
     parameters = {

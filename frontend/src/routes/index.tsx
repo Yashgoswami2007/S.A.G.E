@@ -11,6 +11,7 @@ import { Composer } from "@/components/sage/Composer";
 import { MessageItem } from "@/components/sage/Messages";
 import { ConnectorsDialog } from "@/components/sage/ConnectorsDialog";
 import { SettingsPanel } from "@/components/sage/SettingsPanel";
+import { KnowledgeDialog } from "@/components/sage/KnowledgeDialog";
 import { SageMark } from "@/components/sage/SageLogo";
 import {
   flushChats,
@@ -69,6 +70,7 @@ function SagePage() {
   const [workspaceSidebarOpen, setWorkspaceSidebarOpen] = useState(false);
   const [connectorsOpen, setConnectorsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [model, setModel] = useState<string>("");
   const [style, setStyle] = useState("normal");
   const [profile, setProfile] = useState("auto");
@@ -464,6 +466,7 @@ function SagePage() {
         onDelete={deleteChat}
         onOpenConnectors={() => setConnectorsOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onAddKnowledge={() => setKnowledgeOpen(true)}
         open={sidebarOpen}
         onToggle={() => setSidebarOpen((v) => !v)}
       />
@@ -576,6 +579,10 @@ function SagePage() {
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+      />
+      <KnowledgeDialog
+        open={knowledgeOpen}
+        onOpenChange={setKnowledgeOpen}
       />
       <Toaster />
     </div>

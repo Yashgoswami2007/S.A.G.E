@@ -22,6 +22,7 @@ from sage.auth.middleware import AuthMiddleware
 from sage.core.exceptions import SAGEError
 from sage.api import health, auth, admin, chat, tasks, upload, workspace, system_stats
 from sage.api import settings as settings_router
+from sage.api import rag
 from sage.models.lifecycle import ModelLifecycleManager
 
 from sage.models.registry import ModelRegistry
@@ -64,6 +65,13 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize workspace manager: {exc}")
 
     try:
+        import sage.rag.queue as q
+        q.indexing_queue = q.IndexingQueue()
+        await q.indexing_queue.start()
+    except Exception as exc:
+        logger.error(f"Failed to start RAG indexing queue: {exc}")
+
+    try:
         await lifecycle_manager.start_all()
     except Exception as exc:
         logger.warning(
@@ -73,6 +81,14 @@ async def lifespan(app: FastAPI):
         )
     yield
     logger.info("Shutting down SAGE backend...")
+    
+    try:
+        import sage.rag.queue as q
+        if q.indexing_queue:
+            await q.indexing_queue.stop()
+    except Exception as exc:
+        logger.error(f"Failed to stop RAG indexing queue: {exc}")
+        
     await lifecycle_manager.stop_all()
 
 app = FastAPI(
@@ -105,6 +121,7 @@ app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
 app.include_router(system_stats.router, prefix="/api/system/stats", tags=["system"])
 app.include_router(settings_router.router, prefix="/api/settings", tags=["settings"])
+app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
 
 # Global Exception Handlers
 @app.exception_handler(SAGEError)

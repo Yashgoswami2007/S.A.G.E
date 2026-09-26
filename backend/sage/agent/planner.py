@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Set, Tuple
 from sage.agent.schemas import Plan, Step
 from sage.models.client import OpenAICompatibleClient
 from sage.agent.profiles.base import AgentProfile
+from sage.config import settings
 
 logger = logging.getLogger("sage.agent.planner")
 
@@ -62,7 +63,15 @@ class Planner:
         lines.append("  - requirements: string [REQUIRED]: Detailed requirements for the new tool (e.g., formats, operations).")
         lines.append("DO NOT use any other arguments.\n")
         
-        return "\n".join(lines)
+        
+        formatted_schema = "\n".join(lines)
+        max_chars = settings.TOOL_SCHEMA_MAX_TOKENS * 4
+        if len(formatted_schema) > max_chars:
+            logger.warning(f"Tool schema exceeds maximum budget ({len(formatted_schema)} chars > {max_chars} chars)")
+            # Truncating schema might break JSON, but protects context window
+            formatted_schema = formatted_schema[:max_chars] + "\n...[TRUNCATED]"
+            
+        return formatted_schema
 
     # ── Synthesis Intent Detection ───────────────────────────────────────
 
@@ -220,8 +229,21 @@ class Planner:
         
         history_block = ""
         if history:
-            history_lines = [f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}" for msg in history]
-            history_text = "\n".join(history_lines)
+            # Implement sliding window truncation based on token budget
+            max_history_chars = settings.HISTORY_MAX_TOKENS * 4
+            current_chars = 0
+            retained_history = []
+            
+            # Walk backwards from most recent message
+            for msg in reversed(history):
+                line = f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
+                if current_chars + len(line) > max_history_chars:
+                    retained_history.insert(0, "...[EARLIER HISTORY TRUNCATED DUE TO BUDGET]")
+                    break
+                retained_history.insert(0, line)
+                current_chars += len(line)
+                
+            history_text = "\n".join(retained_history)
             history_block = (
                 "Previous conversation:\n"
                 f"{history_text}\n\n"
@@ -268,7 +290,7 @@ class Planner:
                 model=model_id,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=6144,  # increased: Qwen3 <think> blocks need headroom
+                max_tokens=4096,  # 4K planner budget
                 circuit_breaker_key=circuit_breaker_key,
             )
             

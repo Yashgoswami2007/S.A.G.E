@@ -74,7 +74,7 @@ export const DEFAULT_MODELS: ModelInfo[] = [
     supports_image_upload: false,
     supports_files: true,
     min_vram_gb: 5,
-    context_length: 8192,
+    context_length: 16384,
     is_default: true,
     blurb: "Default local model",
   },
@@ -118,7 +118,7 @@ export function useModels() {
             supports_image_upload: m.supports_image_upload ?? false,
             supports_files: m.supports_files ?? true,
             min_vram_gb: m.min_vram_gb ?? 5,
-            context_length: m.context_length ?? 8192,
+            context_length: m.context_length ?? 16384,
             is_default: m.is_default ?? false,
             blurb: _makeBlurb(m),
           }));

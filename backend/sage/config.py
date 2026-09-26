@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     WORKSPACE_STATE_FILE: str = "config/workspace_state.json"
 
     # Database
-    DATABASE_URL: str = Field(default="postgresql+asyncpg://sage:sage@localhost:5432/sage")
+    DATABASE_URL: str = Field(default="postgresql+asyncpg://sage:123@localhost:5432/sage")
     REDIS_URL: str = Field(default="redis://localhost:6379")
 
     # JWT Auth
@@ -62,6 +62,21 @@ class Settings(BaseSettings):
     DYNAMIC_TOOLS_REQUIRE_APPROVAL_FOR_NETWORK: bool = True
     DYNAMIC_TOOLS_SANDBOX_TIMEOUT_SECONDS: int = 120  # Increased for RTX 5060 8GB (slower inference)
     DYNAMIC_TOOLS_PERSISTENCE_ENABLED: bool = True
+    
+    # Context Budgets
+    HISTORY_MAX_TOKENS: int = 6144
+    TOOL_SCHEMA_MAX_TOKENS: int = 4096
+
+    # RAG / Knowledge Base
+    RAG_ENABLED: bool = True
+    RAG_EMBEDDING_MODEL_ID: str = "nomic-embed"
+    RAG_EMBEDDING_DIM: int = 384
+    RAG_CHUNK_SIZE: int = 512
+    RAG_CHUNK_OVERLAP: int = 64
+    RAG_TOP_K: int = 5
+    RAG_AUTO_INDEX_ON_UPLOAD: bool = True
+    RAG_MAX_CONTEXT_CHUNKS: int = 10
+
     DYNAMIC_TOOLS_DEPENDENCIES_OFFLINE_ONLY: bool = True
     DYNAMIC_TOOLS_ALLOW_INSTALL: bool = False
     DYNAMIC_TOOLS_DIR: str = "./dynamic_tools"

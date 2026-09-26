@@ -1,4 +1,4 @@
-import { Blocks, MessageSquare, PanelLeft, Plus, Search, Settings, Trash2 } from "lucide-react";
+import { Blocks, MessageSquare, PanelLeft, Plus, Search, Settings, Trash2, BookOpen } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { SageWordmark } from "./SageLogo";
 import { groupChats, type Chat } from "@/lib/sage-store";
@@ -13,6 +13,7 @@ export function Sidebar({
   onDelete,
   onOpenConnectors,
   onOpenSettings,
+  onAddKnowledge,
   open,
   onToggle,
 }: {
@@ -23,6 +24,7 @@ export function Sidebar({
   onDelete: (id: string) => void;
   onOpenConnectors: () => void;
   onOpenSettings: () => void;
+  onAddKnowledge?: () => void;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -83,6 +85,14 @@ export function Sidebar({
             className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-primary transition-colors hover:bg-sidebar-accent"
           >
             <Plus className="h-4 w-4" /> New chat
+          </button>
+
+          <button
+            type="button"
+            onClick={onAddKnowledge}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-primary transition-colors hover:bg-sidebar-accent"
+          >
+            <BookOpen className="h-4 w-4" /> Add Knowledge
           </button>
 
           <div className="flex items-center gap-2 rounded-lg px-2 py-1.5 focus-within:bg-sidebar-accent">

@@ -18,21 +18,25 @@ class ToolGenerator:
         
         blocked_str = ", ".join(profile.blocked_modules) if profile.blocked_modules else "None"
         allowed_str = ", ".join(profile.allowed_modules) if profile.allowed_modules else "Any standard module"
-        
+        blocked_functions = ("eval, exec, globals, locals, compile, __import__")
+
         system_prompt = (
-            "You are an expert Python developer generating a tool for the SAGE agent.\n"
-            "You must implement a subclass of `BaseTool` from `sage.tools.base`.\n"
-            "The generated code will be saved as a Python file and executed in an isolated environment.\n\n"
-            "Rules:\n"
-            "1. You MUST import BaseTool and ToolResult from sage.tools.base\n"
-            "2. Define a class that inherits from BaseTool.\n"
-            "3. Set the `name`, `description`, and `parameters` (input schema) class attributes.\n"
-            "4. Implement the `async def execute(self, **kwargs) -> ToolResult:` method.\n"
-            "5. Return a `ToolResult(success=..., output=..., error=...)`.\n"
-            f"6. SECURITY CONSTRAINT: You MUST NOT import or use these blocked modules: {blocked_str}.\n"
-            f"7. You are encouraged to use these allowed modules: {allowed_str}.\n"
-            "8. Return ONLY valid Python code wrapped in ```python ... ``` block. No other text.\n"
-        )
+                "You are an expert Python developer generating a tool for the SAGE agent.\n"
+                "You must implement a subclass of `BaseTool` from `sage.tools.base`.\n"
+                "The generated code will be saved as a Python file and executed in an isolated environment.\n\n"
+
+                "Rules:\n"
+                "1. You MUST import BaseTool and ToolResult from sage.tools.base\n"
+                "2. Define a class that inherits from BaseTool.\n"
+                "3. Set the `name`, `description`, and `parameters` (input schema) class attributes.\n"
+                "4. Implement the `async def execute(self, **kwargs) -> ToolResult:` method.\n"
+                "5. Return a `ToolResult(success=..., output=..., error=...)`.\n"
+                f"6. SECURITY CONSTRAINT: You MUST NOT import or use these blocked modules: {blocked_str}.\n"
+                f"7. SECURITY CONSTRAINT: You MUST NOT call these blocked functions: {blocked_functions}.\n"
+                f"8. You are encouraged to use these allowed modules: {allowed_str}.\n"
+                "9. Do not attempt to bypass or circumvent any security restriction.\n"
+                "10. Return ONLY valid Python code wrapped in ```python ... ``` block. No other text.\n"
+            )
         
         user_prompt = (
             f"Please generate the Python code for this tool specification:\n"

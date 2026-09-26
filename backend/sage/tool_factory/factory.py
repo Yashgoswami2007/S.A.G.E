@@ -1,9 +1,11 @@
+from _pytest import hookspec
 import os
 import json
 import logging
 import asyncio
 import shutil
 import time
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -302,7 +304,52 @@ class ToolFactory:
                 last_error = f"Validation Errors:\n{e.message}\nDetails:\n{e.details}"
                 continue
             stage_timings[f"validate_attempt_{attempt}"] = (time.time() - validate_start) * 1000
-                
+
+             # ── Install tool dependencies into SAGE venv ────────────────────────
+            if spec.dependencies:
+                await emit(
+                    ToolSynthesisState.TESTING,
+                    f"Installing dependencies: {', '.join(spec.dependencies)}",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    tool_name=tool_name,
+                    )       
+
+                logger.info(
+                    "Installing dependencies for '%s': %s",
+                    spec.name,
+                    spec.dependencies,
+                    )
+
+                install_process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    *spec.dependencies,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    )
+
+                stdout, stderr = await install_process.communicate()
+
+                if install_process.returncode != 0:
+                    error = stderr.decode("utf-8", errors="replace")
+                    logger.warning(
+                        "Dependency installation failed for '%s': %s",
+                        spec.name,
+                        error,
+                        )
+                    last_error = (
+                        f"Dependency installation failed:\n"
+                        f"{error}"
+                        )
+                    continue
+
+                logger.info(
+                    "Dependencies installed successfully for '%s'",
+                    spec.name,
+                    )   
             # ── 5. SANDBOX TEST ──────────────────────────────────────────
             logger.info("Running sandbox tests...")
             await emit(

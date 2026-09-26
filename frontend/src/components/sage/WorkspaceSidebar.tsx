@@ -2,8 +2,14 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   FolderOpen, X, RefreshCw, Folder, Trash2, CheckCircle2, AlertCircle,
   ChevronRight, ChevronDown, FileText, FileCode, FileImage, FileSpreadsheet,
-  File as FileIcon, ArrowLeft, Settings2, FolderTree,
+  File as FileIcon, ArrowLeft, Settings2, FolderTree, BookOpen
 } from "lucide-react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { cn } from "@/lib/utils";
@@ -73,26 +79,24 @@ function TreeItem({
   depth,
   onToggleDir,
   onClickFile,
+  isIndexed,
+  onAddToKnowledgeBase,
+  onRemoveFromKnowledgeBase,
 }: {
   node: TreeNode;
   depth: number;
   onToggleDir: (node: TreeNode) => void;
   onClickFile: (node: TreeNode) => void;
+  isIndexed?: boolean;
+  onAddToKnowledgeBase?: (path: string) => void;
+  onRemoveFromKnowledgeBase?: (path: string) => void;
 }) {
   const isDir = node.type === "dir";
 
-  return (
-    <div>
-      <button
-        type="button"
-        className={cn(
-          "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm transition-colors",
-          "hover:bg-sidebar-accent/70 active:bg-sidebar-accent",
-          "group cursor-pointer"
-        )}
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
-        onClick={() => (isDir ? onToggleDir(node) : onClickFile(node))}
-      >
+  const isIndexable = !isDir && [".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md"].some(ext => node.name.toLowerCase().endsWith(ext));
+
+  const InnerNode = (
+    <div className={cn("flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm transition-colors", "hover:bg-sidebar-accent/70 active:bg-sidebar-accent", "group cursor-pointer")} style={{ paddingLeft: `${depth * 16 + 8}px` }} onClick={() => (isDir ? onToggleDir(node) : onClickFile(node))}>
         {isDir ? (
           <>
             {node.expanded ? (
@@ -109,12 +113,39 @@ function TreeItem({
           </>
         )}
         <span className="truncate flex-1">{node.name}</span>
+        {!isDir && isIndexed && (
+          <span title="In Knowledge Base"><BookOpen className="h-3 w-3 shrink-0 text-blue-500 mr-1" /></span>
+        )}
         {!isDir && node.size != null && (
           <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity tabular-nums shrink-0">
             {formatBytes(node.size)}
           </span>
         )}
-      </button>
+    </div>
+  );
+
+  return (
+    <div>
+      {isIndexable ? (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            {InnerNode}
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            {isIndexed ? (
+              <ContextMenuItem onClick={() => onRemoveFromKnowledgeBase?.(node.path)}>
+                Remove from Knowledge Base
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem onClick={() => onAddToKnowledgeBase?.(node.path)}>
+                Add to Knowledge Base
+              </ContextMenuItem>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        InnerNode
+      )}
 
       {/* Children */}
       {isDir && node.expanded && (
@@ -131,6 +162,9 @@ function TreeItem({
                 depth={depth + 1}
                 onToggleDir={onToggleDir}
                 onClickFile={onClickFile}
+                {...(isIndexed != null ? { isIndexed } : {})}
+                {...(onAddToKnowledgeBase ? { onAddToKnowledgeBase } : {})}
+                {...(onRemoveFromKnowledgeBase ? { onRemoveFromKnowledgeBase } : {})}
               />
             ))
           )}
@@ -267,6 +301,7 @@ export function WorkspaceSidebar({ open, onToggle }: WorkspaceSidebarProps) {
   const [viewingFile, setViewingFile] = useState<string | null>(null); // relative path
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  const [indexedFiles, setIndexedFiles] = useState<Set<string>>(new Set());
 
   // Resize state
   const [width, setWidth] = useState(DEFAULT_WIDTH);
@@ -313,7 +348,22 @@ export function WorkspaceSidebar({ open, onToggle }: WorkspaceSidebarProps) {
 
       if (parentPath === null) {
         // Root level
-        setTree(nodes);
+        const sorted = nodes.sort((a: any, b: any) => {
+          if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        
+        fetch("/api/rag/documents").then(res => {
+          if (res.ok) {
+            res.json().then(docs => {
+              const paths = new Set<string>();
+              docs.forEach((d: any) => paths.add(d.file_path));
+              setIndexedFiles(paths);
+            });
+          }
+        }).catch(() => {});
+
+        setTree(sorted);
       } else {
         // Update nested node
         setTree((prev) => updateNode(prev, parentPath, (n) => ({
@@ -406,6 +456,43 @@ export function WorkspaceSidebar({ open, onToggle }: WorkspaceSidebarProps) {
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }, [width]);
+
+  const handleAddToKnowledgeBase = async (path: string) => {
+    try {
+      const absPath = workspaceInfo?.active_workspace ? `${workspaceInfo.active_workspace}\\${path}`.replace(/\\\\/g, '\\').replace(/\//g, '\\') : path;
+      const res = await fetch("/api/rag/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_path: absPath })
+      });
+      if (res.ok) {
+        setIndexedFiles(prev => new Set(prev).add(absPath));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleRemoveFromKnowledgeBase = async (path: string) => {
+    try {
+      const absPath = workspaceInfo?.active_workspace ? `${workspaceInfo.active_workspace}\\${path}`.replace(/\\\\/g, '\\').replace(/\//g, '\\') : path;
+      const resDocs = await fetch("/api/rag/documents");
+      if (resDocs.ok) {
+        const docs = await resDocs.json();
+        const doc = docs.find((d: any) => d.file_path === absPath || d.filename === path.split(/[/\\]/).pop());
+        if (doc) {
+          await fetch(`/api/rag/documents/${doc.id}`, { method: "DELETE" });
+          setIndexedFiles(prev => {
+            const next = new Set(prev);
+            next.delete(absPath);
+            return next;
+          });
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // ── Workspace management handlers ──
   const handleValidate = async () => {
@@ -604,6 +691,11 @@ export function WorkspaceSidebar({ open, onToggle }: WorkspaceSidebarProps) {
                     depth={0}
                     onToggleDir={handleToggleDir}
                     onClickFile={handleClickFile}
+                    isIndexed={
+                      Array.from(indexedFiles).some(p => p.endsWith(node.path) || p.endsWith(node.name))
+                    }
+                    onAddToKnowledgeBase={handleAddToKnowledgeBase}
+                    onRemoveFromKnowledgeBase={handleRemoveFromKnowledgeBase}
                   />
                 ))
               )}

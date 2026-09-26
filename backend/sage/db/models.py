@@ -43,3 +43,5 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
     
     session = relationship("ChatSession", back_populates="messages")
+
+from sage.rag.models import RagDocument, RagChunk  # noqa: F401

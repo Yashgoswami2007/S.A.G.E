@@ -25,16 +25,33 @@ from sage.sandbox.schemas import SandboxResult
 logger = logging.getLogger("sage.sandbox")
 
 # Map language identifiers to their interpreters
+SAGE_ROOT = Path(__file__).resolve().parents[3]
+SAGE_PYTHON = SAGE_ROOT / ".venv" / "Scripts" / "python.exe"
+
 LANGUAGE_RUNTIMES = {
-    "python": ["python", "-u"],
-    "python3": ["python3", "-u"],
+    "python": [str(SAGE_PYTHON), "-u"],
+    "python3": [str(SAGE_PYTHON), "-u"],
+
     "node": ["node"],
     "javascript": ["node"],
     "js": ["node"],
+
     "bash": ["bash"],
     "sh": ["sh"],
-    "powershell": ["powershell", "-ExecutionPolicy", "Bypass", "-File"],
-    "ps1": ["powershell", "-ExecutionPolicy", "Bypass", "-File"],
+
+    "powershell": [
+        "powershell",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+    ],
+    "ps1": [
+        "powershell",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+    ],
+
     "cmd": ["cmd", "/c"],
     "bat": ["cmd", "/c"],
 }

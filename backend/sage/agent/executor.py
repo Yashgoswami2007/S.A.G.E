@@ -88,20 +88,18 @@ class ReActExecutor:
         if file_context_str:
             prompt = f"{prompt}\n{file_context_str}"
 
-        # 1b. VRAM Swap — if the router returned [needs_swap], trigger model swap
+        # 1b. VRAM Swap — if the router returned [needs_swap], use lifecycle
         if "[needs_swap]" in routing_reason and self.lifecycle_manager:
-            # Find what's currently loaded so we can unload it
-            currently_loaded = [
-                m for m in self.router.registry.list_all()
-                if m.status == "READY" and m.id != model_config.id
-            ]
-            if currently_loaded:
-                await self.lifecycle_manager.swap_model(
-                    load_id=model_config.id,
-                    unload_id=currently_loaded[0].id
-                )
-            else:
-                await self.lifecycle_manager.start_model(model_config.id)
+            success = await self.lifecycle_manager.ensure_model(model_config.id)
+            if not success:
+                # Failed to load — fall back to whatever is READY
+                fallback = self.router.registry.get_default()
+                if fallback and fallback.status == "READY":
+                    model_config = fallback
+                    routing_reason = f"swap failed, falling back to {fallback.id}"
+                else:
+                    from sage.core.exceptions import ModelError
+                    raise ModelError("Cannot load requested model and no fallback available")
             routing_reason = routing_reason.replace(" [needs_swap]", " [swapped]")
 
         client = OpenAICompatibleClient(base_url=f"http://localhost:{model_config.server_port}")
@@ -251,7 +249,7 @@ class ReActExecutor:
                 if evt.tool_result:
                     messages.append({
                         "role": "user",
-                        "content": f"Observation from {evt.tool_name}: {evt.tool_result[:500]}",
+                        "content": f"Observation from {evt.tool_name}: {evt.tool_result}",
                     })
                 elif evt.error:
                     messages.append({
@@ -484,15 +482,38 @@ class ReActExecutor:
                     {
                         "role": "system",
                         "content": (
-                            f"You are a helpful assistant operating under profile '{profile.name}'. "
-                            "If any tools failed earlier, acknowledge the failure briefly and "
-                            "answer using whatever information is still available."
+                            f"""You are a helpful assistant operating under profile '{profile.name}'.
+
+IMPORTANT FILE-GENERATION RULES:
+
+- Never claim that a file was created, generated, saved, exported, or attached
+  unless the corresponding file-generation tool actually executed successfully.
+- Never fabricate a filename or file path.
+- If the user requests a DOCX, XLSX, PPTX, or PDF, a corresponding generation
+  tool must be executed before claiming the file exists.
+- If the generation tool fails, clearly state that the file was not generated.
+- If a file-generation tool succeeds, use the exact path returned by the tool.
+- Do not write phrases such as '[DOCX Report Generated]' yourself.
+
+If any tools failed earlier, acknowledge the failure briefly and answer using
+whatever information is still available."""
+
                         ),
                     }
                 ]
                 
                 if history:
-                    messages.extend(history)
+                    max_history_chars = settings.HISTORY_MAX_TOKENS * 4
+                    current_chars = 0
+                    retained_history = []
+                    for msg in reversed(history):
+                        # Approximate size based on raw string length
+                        msg_str = f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+                        if current_chars + len(msg_str) > max_history_chars:
+                            break
+                        retained_history.insert(0, msg)
+                        current_chars += len(msg_str)
+                    messages.extend(retained_history)
                 
                 if vision_images and model_config.supports_vision:
                     # Construct OpenAI multimodal content array
@@ -697,7 +718,16 @@ class ReActExecutor:
                 )}
             ]
             if history:
-                fr_messages.extend(history)
+                max_history_chars = settings.HISTORY_MAX_TOKENS * 4
+                current_chars = 0
+                retained_history = []
+                for msg in reversed(history):
+                    msg_str = f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+                    if current_chars + len(msg_str) > max_history_chars:
+                        break
+                    retained_history.insert(0, msg)
+                    current_chars += len(msg_str)
+                fr_messages.extend(retained_history)
             fr_messages.append({"role": "user", "content": prompt})
             
             _append_tool_context(fr_messages)
@@ -761,6 +791,10 @@ class ReActExecutor:
             selected_model=model_config.id
         )
         await emit(completed_event)
+
+        # Release the chat model so it's eligible for unloading
+        if "[swapped]" in routing_reason and self.lifecycle_manager:
+            await self.lifecycle_manager.release_model(model_config.id)
 
         return AgentResponse(
             task_id=task_id,

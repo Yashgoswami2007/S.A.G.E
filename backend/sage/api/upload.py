@@ -52,6 +52,7 @@ async def upload_files(
         raise HTTPException(status_code=500, detail=f"Failed to initialize upload directory: {str(e)}")
 
     saved_paths = []
+    absolute_paths = []
     errors = []
 
     for file in files:
@@ -78,6 +79,7 @@ async def upload_files(
                 rel_path = str(dest.relative_to(upload_dir.parent.parent))
 
             saved_paths.append(rel_path)
+            absolute_paths.append(str(dest))
             logger.info(
                 "File uploaded: %s (%d bytes) -> %s",
                 file.filename, len(content), rel_path,
@@ -91,6 +93,45 @@ async def upload_files(
         from fastapi import HTTPException
         error_msg = "; ".join(f"{err['filename']}: {err['error']}" for err in errors)
         raise HTTPException(status_code=400, detail=f"Failed to upload files: {error_msg}")
+
+    from sage.config import settings
+    if getattr(settings, "RAG_AUTO_INDEX_ON_UPLOAD", True):
+        import hashlib
+        from sage.rag.queue import indexing_queue, IndexingJob
+        from sage.rag.models import RagDocument
+        from sage.rag.ingest import _FILE_TYPE_MAP, _hash_file
+        from sage.db.session import AsyncSessionLocal
+        from sage.rag.store import VectorStore
+        
+        workspace_id = hashlib.sha256(str(workspace).encode()).hexdigest()[:16]
+        store = VectorStore()
+        
+        for abs_path in absolute_paths:
+            try:
+                file_hash = _hash_file(abs_path)
+                file_type = _FILE_TYPE_MAP.get(Path(abs_path).suffix.lower(), "txt")
+                
+                async with AsyncSessionLocal() as db:
+                    existing = await store.get_document_by_hash(db, workspace_id, file_hash)
+                    if not existing:
+                        doc = RagDocument(
+                            workspace_id=workspace_id,
+                            filename=Path(abs_path).name,
+                            file_path=abs_path,
+                            file_type=file_type,
+                            file_hash=file_hash,
+                            file_size=Path(abs_path).stat().st_size,
+                            status="pending"
+                        )
+                        await store.insert_document(db, doc)
+                        if indexing_queue:
+                            indexing_queue.enqueue(IndexingJob(
+                                file_path=abs_path,
+                                workspace_id=workspace_id,
+                                document_id=doc.id
+                            ))
+            except Exception as index_err:
+                logger.error(f"Failed to enqueue {abs_path} for indexing: {index_err}")
 
     result = {"paths": saved_paths}
     if errors:

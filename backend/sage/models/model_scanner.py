@@ -28,6 +28,11 @@ _CODING_PATTERNS = [
     "qwen2.5-coder", "granite-code",
 ]
 
+_EMBEDDING_PATTERNS = [
+    "embed", "nomic-embed", "bge-", "gte-", "e5-", "minilm",
+    "all-minilm", "instructor", "stella",
+]
+
 # Models known to need --jinja for proper chat templates
 _JINJA_PATTERNS = [
     "gemma-4", "gemma4",
@@ -84,6 +89,11 @@ def _estimate_vram_gb(filename: str) -> int:
 
 def _infer_capabilities(filename_lower: str) -> List[str]:
     """Infer model capabilities from the filename."""
+    # Check embedding FIRST — embedding models should NOT get reasoning/general
+    for pattern in _EMBEDDING_PATTERNS:
+        if pattern in filename_lower:
+            return ["embedding"]
+
     caps: Set[str] = {"reasoning", "general"}
 
     for pattern in _VISION_PATTERNS:
@@ -216,6 +226,8 @@ class ModelScanner:
             filename_lower = entry.lower()
             capabilities = _infer_capabilities(filename_lower)
             extra_args = ["--jinja"] if _needs_jinja(filename_lower) else []
+            if "embedding" in capabilities:
+                extra_args.append("--embedding")
             vram_gb = _estimate_vram_gb(entry)
             display_name = _make_display_name(entry)
 
@@ -235,7 +247,7 @@ class ModelScanner:
                 capabilities=capabilities,
                 priority=10,  # lower priority than YAML-defined models
                 min_vram_gb=vram_gb,
-                context_length=8192,
+                context_length=16384,
                 extra_args=extra_args,
             )
 

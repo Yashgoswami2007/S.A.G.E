@@ -10,7 +10,7 @@ models:
     capabilities: ["reasoning", "general"]
     priority: 1
     min_vram_gb: 5
-    context_length: 8192
+    context_length: 16384
 
   - id: gemma-4-12b
     name: "Gemma 4 12B IT"
@@ -25,5 +25,15 @@ models:
     min_vram_gb: 8
     context_length: 8192
     extra_args: ["--jinja"]    # required for gemma-4 unified architecture chat templates
-
-
+  - id: nomic-embed
+    name: "Nomic Embed Text v1.5"
+    model_path: "./models/nomic-embed-text-v1.5.Q8_0.gguf"
+    server_port: 8003
+    server_type: "llama-server"
+    auto_start: true
+    gpu_layers: 99
+    gpu_mode: auto
+    capabilities: ["embedding"]
+    priority: 1
+    min_vram_gb: 1
+    context_length: 8192

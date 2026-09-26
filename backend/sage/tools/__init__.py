@@ -24,6 +24,7 @@ from sage.tools.document_generators import (
 )
 from sage.tools.calculator import CalculatorTool
 from sage.tools.code_review import PythonCodeReviewTool
+from sage.tools.rag_tool import RagSearchTool
 
 def create_default_tool_registry() -> ToolRegistry:
     """Creates a ToolRegistry with all 18 core tools registered."""
@@ -58,5 +59,8 @@ def create_default_tool_registry() -> ToolRegistry:
     # Utilities (2 tools)
     registry.register(CalculatorTool())
     registry.register(PythonCodeReviewTool())
+
+    # Knowledge Base (1 tool)
+    registry.register(RagSearchTool())
 
     return registry

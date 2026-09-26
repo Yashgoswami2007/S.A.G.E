@@ -20,6 +20,7 @@ import {
   ShieldAlert,
   Ban,
   Shield,
+  BookOpen,
 } from "lucide-react";
 import type { AgentEvent } from "@/lib/agent-events";
 
@@ -148,6 +149,44 @@ function ToolCallChip({ event }: { event: Extract<AgentEvent, { type: "TOOL_CALL
 function ToolResultCard({ event }: { event: Extract<AgentEvent, { type: "TOOL_RESULT" }> }) {
   const [open, setOpen] = useState(false);
   const isSuccess = event.success;
+
+  if (event.tool_name === "rag_search" && isSuccess) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(event.output);
+    } catch {}
+
+    if (parsed && parsed.results && Array.isArray(parsed.results)) {
+       return (
+         <div className="rounded-xl border border-border bg-card text-sm">
+           <button 
+             onClick={() => setOpen(!open)}
+             className="flex w-full items-center justify-between p-3 hover:bg-muted/50 rounded-xl transition-colors"
+           >
+             <div className="flex items-center gap-2">
+               <BookOpen className="h-4 w-4 text-emerald-500" />
+               <span className="font-medium text-foreground">
+                 Found information in {parsed.chunks_retrieved} documents
+               </span>
+             </div>
+             {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+           </button>
+           {open && (
+             <div className="border-t border-border p-3 bg-muted/30 space-y-2">
+               {parsed.results.map((r: any, i: number) => (
+                 <div key={i} className="rounded border border-border bg-background p-2 text-[11px] text-muted-foreground">
+                   <div className="font-medium text-foreground mb-1">
+                     Source {i + 1}: {r.document_filename} {r.page_number ? `(Page ${r.page_number})` : ''} {r.section ? `- ${r.section}` : ''}
+                   </div>
+                   <div className="whitespace-pre-wrap">{r.content}</div>
+                 </div>
+               ))}
+             </div>
+           )}
+         </div>
+       );
+    }
+  }
 
   return (
     <div className="rounded-xl border border-border bg-card text-sm">

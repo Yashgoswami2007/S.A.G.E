@@ -85,6 +85,7 @@ const SECTION_ICONS: Record<string, string> = {
   tool_factory_timeouts: "⏱",
   tool_security: "🛡",
   server: "🌐",
+  rag: "📚",
 };
 
 // ── Component ──────────────────────────────────────────────────────────────

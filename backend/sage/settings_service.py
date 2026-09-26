@@ -134,6 +134,25 @@ SETTINGS_SCHEMA: List[Dict[str, Any]] = [
         "min": None,
         "max": None,
     },
+    # ── RAG (Knowledge Base) ──────────────────────────────────────────────
+    {
+        "key": "RAG_AUTO_INDEX_UPLOADS",
+        "section": "rag",
+        "section_label": "Knowledge Base (RAG)",
+        "label": "Auto-Index Uploads",
+        "description": "Automatically process and index supported documents into the local knowledge base when uploaded to a chat.",
+        "type": "bool",
+        "control": "toggle",
+        "default": True,
+        "options": None,
+        "runtime": True,
+        "persist": True,
+        "restart_required": False,
+        "security_sensitive": False,
+        "requires_confirmation": False,
+        "min": None,
+        "max": None,
+    },
     # ── Tool Factory ─────────────────────────────────────────────────────
     {
         "key": "DYNAMIC_TOOLS_ENABLED",
